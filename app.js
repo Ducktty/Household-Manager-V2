@@ -1135,6 +1135,7 @@ function openGeminiApp() {
    ------------------------------------------------------------ */
 let lastPhotoDataUrl = null;
 let lastPhotoFile = null;  // 原始文件(用来 share)
+let pendingPasteFromShare = false;  // 从 Gemini 回来时,优先跳粘贴页
 
 function openScan() {
   showScreen('scan');
@@ -1144,6 +1145,7 @@ function openScan() {
   document.getElementById('scan-photo-preview').style.display = 'none';
   lastPhotoFile = null;
   lastPhotoDataUrl = null;
+  pendingPasteFromShare = false;
 }
 
 function handleCameraFile(file) {
@@ -1408,17 +1410,24 @@ function clearCart() {
 function setupClipboardAutoDetect() {
   document.addEventListener('visibilitychange', async () => {
     if (document.visibilityState !== 'visible') return;
-    if (currentScreen !== 'gemini' && currentScreen !== 'scan') return;
+    if (!pendingPasteFromShare) return;  // 只在 share 后的回来才处理
+
+    pendingPasteFromShare = false;  // 重置
+
+    // 试读剪贴板(权限可能拒,拒了就给提示)
     const res = await readClipboard();
-    if (!res.ok || !res.value) return;
-    const txt = res.value;
-    // 简单启发式:长度 1-50,含中文/英文字符,不是明显价格
-    if (txt.length < 1 || txt.length > 50) return;
-    if (/^[\d.,¥$￥]+$/.test(txt)) return;  // 跳过纯数字
-    if (currentScreen === 'gemini' || currentScreen === 'scan') {
-      openPaste({ name: txt });
-      toast('已从剪贴板读入');
+    if (res.ok && res.value) {
+      const txt = res.value;
+      // 启发式:长度 1-50,含中文/英文字符,不是明显价格
+      if (txt.length >= 1 && txt.length <= 50 && !/^[\d.,¥$￥]+$/.test(txt)) {
+        openPaste({ name: txt });
+        toast('已从剪贴板读入');
+        return;
+      }
     }
+    // 读不到或者内容不对,还是跳到粘贴页(让用户手动粘)
+    openPaste();
+    toast('读不到剪贴板,长按输入框手动粘入', 2500);
   });
 }
 
@@ -1446,8 +1455,12 @@ function bindEvents() {
     if (lastPhotoFile) {
       const res = await shareToGemini(lastPhotoFile, lastPrompt || defaultPrompt());
       if (res.shared) {
+        pendingPasteFromShare = true;  // 标记:回来时要读剪贴板
+        // 关抽屉 + 关拍照预览(不然回到 App 还看到拍图状态)
         hideScanSheet();
-        toast('已调起分享面板,选 Gemini 后返回', 2000);
+        // 留个 toast 提示 + 背景全黑,代表在等待分享结果
+        document.getElementById('scan-photo-preview').style.display = 'none';
+        toast('已调起分享,选 Gemini 后复制答案返回', 2500);
         return;  // 等用户从 Gemini 切回来,visibilitychange 走自动读剪贴板
       }
       if (res.cancelled) { return; }  // 用户取消,停在拍照页
