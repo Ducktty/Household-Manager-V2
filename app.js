@@ -646,19 +646,81 @@ function openEdit() {
 function saveEdit() {
   const p = PRODUCTS.find(x => x.id === currentProductId);
   if (!p) return;
-  const name = document.getElementById('edit-name').value.trim();
+  const newName = document.getElementById('edit-name').value.trim();
   const cycle = parseInt(document.getElementById('edit-cycle').value, 10);
-  if (!name) { toast('请填产品名称'); return; }
+  if (!newName) { toast('请填产品名称'); return; }
   if (!cycle || cycle <= 0) { toast('请填有效的使用周期'); return; }
-  p.name = name;
-  p.category = document.getElementById('edit-category').value;
-  p.unit = document.getElementById('edit-unit').value.trim() || '件';
-  p.cycle = cycle;
-  p.usualPrice = parseFloat(document.getElementById('edit-usual-price').value) || p.usualPrice || 0;
+
+  // 改名后检测是否撞同款
+  if (newName !== p.name) {
+    const dup = findByExactName(newName);
+    if (dup && dup.id !== p.id) {
+      // 弹合并确认
+      confirmDialog({
+        title: '已有同款产品',
+        body: `家里已有“${newName}”了(剩 ${dup.qty} ${dup.unit},${dup.history?.length || 0} 条历史)。要合并到这个产品里吗?合并后另一个产品会删除。`,
+        confirmText: '合并',
+        onConfirm: () => doMergeProducts(p, dup, {
+          name: newName,
+          category: document.getElementById('edit-category').value,
+          unit: document.getElementById('edit-unit').value.trim() || '件',
+          cycle,
+          usualPrice: parseFloat(document.getElementById('edit-usual-price').value) || p.usualPrice || 0,
+        }),
+      });
+      return;
+    }
+  }
+
+  // 普通保存
+  applyEditToProduct(p, {
+    name: newName,
+    category: document.getElementById('edit-category').value,
+    unit: document.getElementById('edit-unit').value.trim() || '件',
+    cycle,
+    usualPrice: parseFloat(document.getElementById('edit-usual-price').value) || p.usualPrice || 0,
+  });
   saveProducts();
   renderDetail();
   showScreen('detail', { pushHistory: false });
   toast('已保存');
+}
+
+function applyEditToProduct(p, fields) {
+  p.name = fields.name;
+  p.category = fields.category;
+  p.unit = fields.unit;
+  p.cycle = fields.cycle;
+  p.usualPrice = fields.usualPrice;
+}
+
+/* 合并两个产品:把 dup 的 qty + history 合到 p 上,删 dup */
+function doMergeProducts(p, dup, newFields) {
+  // 更新 p 的元信息
+  applyEditToProduct(p, newFields);
+  // 合并 dup 的库存
+  p.qty = (p.qty || 0) + (dup.qty || 0);
+  // 合并历史(按日期排序)
+  p.history = p.history || [];
+  if (dup.history && dup.history.length > 0) {
+    p.history = p.history.concat(dup.history);
+    p.history.sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+  }
+  // usualPrice 取两者中较新的(保留 p 的,只有 p 没设才用 dup 的)
+  p.usualPrice = p.usualPrice || dup.usualPrice || 0;
+  // 重算 star
+  if (p.history.length > 0) {
+    const prices = p.history.map(h => h.price);
+    const min = Math.min(...prices);
+    p.history.forEach(h => { h.star = (h.price === min); });
+  }
+  // 删 dup
+  PRODUCTS = PRODUCTS.filter(x => x.id !== dup.id);
+  saveProducts();
+  renderHome();
+  renderDetail();  // 重渲详情页(产品名/数量/历史都变了)
+  showScreen('detail', { pushHistory: false });
+  toast(`已合并,共 ${p.history.length} 条历史`);
 }
 
 /* ------------------------------------------------------------
@@ -1054,6 +1116,8 @@ async function copyToClipboard(text) {
 }
 
 function openGeminiApp() {
+  // 复制 prompt 到剪贴板(以防万一)
+  copyToClipboard(lastPrompt || defaultPrompt());
   // 动态创建 <a target="_blank"> 触发跳转,避免被 iOS Safari / 部分安卓浏览器拦截
   const url = 'https://gemini.google.com/app';
   const a = document.createElement('a');
@@ -1070,6 +1134,7 @@ function openGeminiApp() {
    12. 拍照页 → Gemini / 手动
    ------------------------------------------------------------ */
 let lastPhotoDataUrl = null;
+let lastPhotoFile = null;  // 原始文件(用来 share)
 
 function openScan() {
   showScreen('scan');
@@ -1077,10 +1142,13 @@ function openScan() {
   document.getElementById('scan-sheet').classList.remove('show');
   document.getElementById('sheet-backdrop').classList.remove('show');
   document.getElementById('scan-photo-preview').style.display = 'none';
+  lastPhotoFile = null;
+  lastPhotoDataUrl = null;
 }
 
 function handleCameraFile(file) {
   if (!file) return;
+  lastPhotoFile = file;
   const reader = new FileReader();
   reader.onload = (e) => {
     lastPhotoDataUrl = e.target.result;
@@ -1090,6 +1158,33 @@ function handleCameraFile(file) {
     showScanSheet();
   };
   reader.readAsDataURL(file);
+}
+
+/* 用 Web Share API 调起系统分享面板(真机能用) */
+async function shareToGemini(file, promptText) {
+  // 1) 先复制 prompt 到剪贴板(不论后面是否成功)
+  await copyToClipboard(promptText);
+
+  // 2) 尝试系统级分享(图 + 文字)
+  if (navigator.canShare && file) {
+    try {
+      // iOS Safari 要求 File 有 name
+      const fileToShare = new File([file], file.name || 'product.jpg', { type: file.type || 'image/jpeg' });
+      if (navigator.canShare({ files: [fileToShare] })) {
+        await navigator.share({
+          title: '识别这个产品',
+          text: promptText,
+          files: [fileToShare],
+        });
+        // 用户点完会回到 App,visibilitychange 会自动读剪贴板
+        return { shared: true };
+      }
+    } catch (e) {
+      if (e.name === 'AbortError') return { shared: false, cancelled: true };
+      console.warn('share failed', e);
+    }
+  }
+  return { shared: false, cancelled: false };
 }
 
 function showScanSheet() {
@@ -1346,7 +1441,18 @@ function bindEvents() {
     const f = e.target.files && e.target.files[0];
     if (f) handleCameraFile(f);
   });
-  document.getElementById('btn-go-gemini').addEventListener('click', () => {
+  document.getElementById('btn-go-gemini').addEventListener('click', async () => {
+    // 如果有拍的图,先试 Web Share(手机能调起系统分享面板)
+    if (lastPhotoFile) {
+      const res = await shareToGemini(lastPhotoFile, lastPrompt || defaultPrompt());
+      if (res.shared) {
+        hideScanSheet();
+        toast('已调起分享面板,选 Gemini 后返回', 2000);
+        return;  // 等用户从 Gemini 切回来,visibilitychange 走自动读剪贴板
+      }
+      if (res.cancelled) { return; }  // 用户取消,停在拍照页
+    }
+    // 电脑 / 不支持 share / 降级:走老路径——跳 Gemini 引导页(网页版)
     hideScanSheet();
     openGemini();
   });
