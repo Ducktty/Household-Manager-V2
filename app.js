@@ -6,10 +6,37 @@
    1. 常量 & 工具
    ------------------------------------------------------------ */
 const STORAGE_KEY = 'jiadang_products_v1';
+const CATEGORIES_KEY = 'jiadang_categories_v2';  // V2: 分类作为独立实体
+const IMAGES_KEY = 'jiadang_images_v2';          // V2: 用户上传的图
 const CART_KEY = 'jiadang_cart_v1';
 const PROMPT_KEY = 'jiadang_last_prompt_v1';
 
-const CATEGORIES = ['食品', '饮料', '乳制品', '清洁用品', '生活用纸', '个护', '调料', '其他'];
+/* V2: 内置分类(name, emoji, color),初始创建用 */
+const BUILTIN_CATEGORIES = [
+  { name: '乳制品',    emoji: '🥛', color: '#fce7f3' },
+  { name: '饮料',      emoji: '🥤', color: '#dbeafe' },
+  { name: '食品',      emoji: '🍚', color: '#fef3c7' },
+  { name: '调料',      emoji: '🧂', color: '#fed7aa' },
+  { name: '清洁用品',  emoji: '🧴', color: '#e0e7ff' },
+  { name: '生活用纸',  emoji: '🧻', color: '#ede9fe' },
+  { name: '个护',      emoji: '🪥', color: '#fce7f3' },
+  { name: '其他',      emoji: '📦', color: '#f1f5f9' },
+];
+
+/* V2: 按分类的 emoji 范本库(8-12 个/分类) */
+const EMOJI_LIBRARY = {
+  '乳制品':   ['🥛', '🍶', '🧈', '🍼', '🧀', '🥫', '🍨', '🍦'],
+  '饮料':     ['🥤', '🍵', '☕', '🧃', '🧋', '🍺', '🍷', '🥃', '🧊', '💧'],
+  '食品':     ['🍚', '🍞', '🍜', '🥚', '🍪', '🍫', '🍩', '🥯', '🥖', '🧇', '🥞', '🍯'],
+  '调料':     ['🧂', '🍯', '🫒', '🌶', '🧄', '🧅', '🥫', '🍯', '🥄', '🫙'],
+  '清洁用品': ['🧴', '🧽', '🪣', '🧹', '🧺', '🧼', '🪒', '🚿', '🧯', '🪥'],
+  '生活用纸': ['🧻', '🧷', '🧺', '📄', '🗞', '🧽', '🪣', '🧴'],
+  '个护':     ['🪥', '🧴', '🧼', '🧽', '🪒', '💄', '💅', '🧖', '🛁', '🧴'],
+  '其他':     ['📦', '🎁', '🛍', '🧰', '🔧', '💡', '🪴', '🧸'],
+};
+
+/* V1 兼容: 旧代码用 CATEGORIES 作为字符串数组, V2 里调用 compat list */
+const CATEGORIES = BUILTIN_CATEGORIES.map(c => c.name);
 
 /* emoji 字典(按名称猜) */
 const EMOJI_DICT = [
@@ -113,10 +140,92 @@ function loadData() {
     CART = [];
   }
   lastPrompt = localStorage.getItem(PROMPT_KEY) || defaultPrompt();
+  // V2: 加载分类 + 图片库
+  loadCategories();
+  loadImages();
+  // V2: 老数据迁移(category 字符串 → categoryId)
+  migrateV1ToV2();
   // 第一次启动时,把种子数据写回(让用户看到默认 3 件)
   if (!localStorage.getItem(STORAGE_KEY)) {
     saveProducts();
+    saveCategories();
   }
+}
+
+/* V2 分类库 */
+let CATEGORIES_DB = [];   // [{id, name, emoji, color, builtin}]
+let IMAGES_DB = [];       // [{id, dataUrl, createdAt, usedCount}]
+
+function loadCategories() {
+  try {
+    const raw = localStorage.getItem(CATEGORIES_KEY);
+    CATEGORIES_DB = raw ? JSON.parse(raw) : [];
+  } catch (e) { CATEGORIES_DB = []; }
+  if (CATEGORIES_DB.length === 0) {
+    // 首次:建 8 个内置分类
+    CATEGORIES_DB = BUILTIN_CATEGORIES.map(c => ({
+      id: 'cat_' + uid(),
+      name: c.name,
+      emoji: c.emoji,
+      color: c.color,
+      builtin: true,
+    }));
+    saveCategories();
+  }
+}
+
+function saveCategories() {
+  try { localStorage.setItem(CATEGORIES_KEY, JSON.stringify(CATEGORIES_DB)); }
+  catch (e) { console.warn('save categories failed', e); }
+}
+
+function getCategoryById(id) {
+  return CATEGORIES_DB.find(c => c.id === id);
+}
+function getCategoryByName(name) {
+  return CATEGORIES_DB.find(c => c.name === name);
+}
+function getCategoryEmoji(id) {
+  const c = getCategoryById(id);
+  return c ? c.emoji : '📦';
+}
+
+function loadImages() {
+  try {
+    const raw = localStorage.getItem(IMAGES_KEY);
+    IMAGES_DB = raw ? JSON.parse(raw) : [];
+  } catch (e) { IMAGES_DB = []; }
+}
+
+function saveImages() {
+  try { localStorage.setItem(IMAGES_KEY, JSON.stringify(IMAGES_DB)); }
+  catch (e) { console.warn('save images failed', e); }
+}
+
+function getImageById(id) {
+  return IMAGES_DB.find(i => i.id === id);
+}
+
+/* V1 → V2 迁移 */
+function migrateV1ToV2() {
+  let changed = false;
+  for (const p of PRODUCTS) {
+    // 1) 老 category 字符串 → categoryId
+    if (p.category !== undefined && p.categoryId === undefined) {
+      let cat = getCategoryByName(p.category);
+      if (!cat) {
+        // 异常名字,归到"其他"
+        cat = getCategoryByName('其他') || CATEGORIES_DB[0];
+      }
+      p.categoryId = cat.id;
+      delete p.category;
+      changed = true;
+    }
+    // 2) 保证 emoji / imageId 字段存在
+    if (p.emoji === undefined) p.emoji = null;
+    if (p.imageId === undefined) p.imageId = null;
+  }
+  if (changed) saveProducts();
 }
 
 function saveProducts() {
@@ -144,7 +253,9 @@ function seedProducts() {
     {
       id: uid(),
       name: '伊利纯牛奶 1L',
-      category: '乳制品',
+      category: '乳制品',  // 迁移时会自动转 categoryId
+      emoji: '🥛',
+      imageId: null,
       unit: '盒',
       cycle: 7,
       qty: 1,
@@ -160,6 +271,8 @@ function seedProducts() {
       id: uid(),
       name: '蓝月亮洗衣液 2kg',
       category: '清洁用品',
+      emoji: '🧴',
+      imageId: null,
       unit: '瓶',
       cycle: 60,
       qty: 0.4,
@@ -174,6 +287,8 @@ function seedProducts() {
       id: uid(),
       name: '可口可乐 330ml',
       category: '饮料',
+      emoji: '🥤',
+      imageId: null,
       unit: '瓶',
       cycle: 3,
       qty: 6,
@@ -247,7 +362,7 @@ function findSimilar(query) {
 /* ------------------------------------------------------------
    4. 页面导航
    ------------------------------------------------------------ */
-const SCREENS = ['home', 'scan', 'gemini', 'detail', 'roi', 'paste', 'calc', 'manual', 'edit', 'cart', 'history'];
+const SCREENS = ['home', 'scan', 'gemini', 'detail', 'roi', 'paste', 'calc', 'manual', 'edit', 'cart', 'history', 'icon-picker'];
 let currentScreen = 'home';
 let screenHistory = ['home'];
 
@@ -268,6 +383,48 @@ function showScreen(name, opts = {}) {
   // 滚到顶部
   const body = el?.querySelector('.screen-body');
   if (body) body.scrollTop = 0;
+
+  // V2: 同步当前产品的图标预览
+  refreshCurrentProductIconUI(name);
+}
+
+function refreshCurrentProductIconUI(screenName) {
+  const p = PRODUCTS.find(x => x.id === currentProductId);
+  if (!p) return;
+  if (screenName === 'manual') {
+    const preview = document.getElementById('manual-icon-preview');
+    if (preview) {
+      // 如果有 imageId 用 img,否则用 emoji
+      if (p.imageId) {
+        const img = getImageById(p.imageId);
+        if (img) {
+          preview.innerHTML = '';
+          const im = document.createElement('img');
+          im.src = img.dataUrl;
+          im.style.cssText = 'width:22px;height:22px;object-fit:cover;border-radius:4px;';
+          preview.appendChild(im);
+          return;
+        }
+      }
+      preview.textContent = p.emoji || (p.categoryId && getCategoryEmoji(p.categoryId)) || guessEmoji(p.name);
+    }
+  } else if (screenName === 'edit') {
+    const preview = document.getElementById('edit-icon-preview');
+    if (preview) {
+      if (p.imageId) {
+        const img = getImageById(p.imageId);
+        if (img) {
+          preview.innerHTML = '';
+          const im = document.createElement('img');
+          im.src = img.dataUrl;
+          im.style.cssText = 'width:22px;height:22px;object-fit:cover;border-radius:4px;';
+          preview.appendChild(im);
+          return;
+        }
+      }
+      preview.textContent = p.emoji || (p.categoryId && getCategoryEmoji(p.categoryId)) || guessEmoji(p.name);
+    }
+  }
 }
 
 /* 每个屏幕的默认父级(back 跳到哪) */
@@ -283,6 +440,7 @@ const PARENT = {
   calc: 'detail',
   edit: 'detail',
   history: 'detail',
+  'icon-picker': null,  // 动态: 可能是 manual / edit / detail
 };
 
 function goBack() {
@@ -378,7 +536,7 @@ function renderHome() {
 function renderProductCard(p) {
   const status = getStatus(p);
   const days = getForecastDays(p);
-  const emoji = guessEmoji(p.name);
+  const icon = getProductIcon(p);
   const statusText = getStatusText(p);
   const daysText = days != null ? `剩 ${p.qty} ${p.unit} · 预计 ${days} 天后用完` : `剩 ${p.qty} ${p.unit}`;
   const maxDays = 7;
@@ -386,7 +544,7 @@ function renderProductCard(p) {
 
   return `
     <div class="product-card" data-id="${p.id}">
-      <div class="emoji">${emoji}</div>
+      <div class="emoji">${icon}</div>
       <div class="info">
         <div class="name">
           <span>${escapeHtml(p.name)}</span>
@@ -401,6 +559,93 @@ function renderProductCard(p) {
 
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
+}
+
+/* V2: 产品头像渲染
+   优先级: imageId(自定义图) > product.emoji > category.emoji > guessEmoji(name) */
+function getProductIcon(p) {
+  // 1) 自定义图
+  if (p.imageId) {
+    const img = getImageById(p.imageId);
+    if (img) {
+      return `<img class="product-icon-img" src="${escapeHtml(img.dataUrl)}" alt="">`;
+    }
+  }
+  // 2) 产品 emoji
+  if (p.emoji) return p.emoji;
+  // 3) 分类 emoji
+  if (p.categoryId) {
+    const c = getCategoryById(p.categoryId);
+    if (c && c.emoji) return c.emoji;
+  }
+  // 4) 终极兑底
+  return guessEmoji(p.name);
+}
+
+function renderProductIconLarge(p) {
+  // 同 getProductIcon, 但不限制为 product-card 的 size
+  if (p.imageId) {
+    const img = getImageById(p.imageId);
+    if (img) return `<img class="product-icon-img" style="width:100%;height:100%;object-fit:cover;border-radius:14px;" src="${escapeHtml(img.dataUrl)}" alt="">`;
+  }
+  if (p.emoji) return p.emoji;
+  if (p.categoryId) {
+    const c = getCategoryById(p.categoryId);
+    if (c && c.emoji) return c.emoji;
+  }
+  return guessEmoji(p.name);
+}
+
+/* V2: 在指定容器里渲染产品头像(图 / emoji) */
+function renderProductEmojiBox(containerId, p) {
+  const el = document.getElementById(containerId);
+  if (!el) return;
+  // 清除旧内容
+  while (el.firstChild) el.removeChild(el.firstChild);
+  if (p.imageId) {
+    const img = getImageById(p.imageId);
+    if (img) {
+      const im = document.createElement('img');
+      im.src = img.dataUrl;
+      im.alt = '';
+      im.style.cssText = 'width:100%;height:100%;object-fit:cover;border-radius:14px;';
+      el.appendChild(im);
+      return;
+    }
+  }
+  el.textContent = p.emoji || (p.categoryId && getCategoryEmoji(p.categoryId)) || guessEmoji(p.name);
+}
+
+/* V2: 图片处理 —— file -> base64 -> 200x200 jpeg 0.7 */
+function fileToCompressedDataURL(file, maxSize = 200, quality = 0.7) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const img = new Image();
+      img.onload = () => {
+        // 缩到 maxSize
+        const canvas = document.createElement('canvas');
+        let w = img.naturalWidth, h = img.naturalHeight;
+        if (w > h) {
+          if (w > maxSize) { h = h * maxSize / w; w = maxSize; }
+        } else {
+          if (h > maxSize) { w = w * maxSize / h; h = maxSize; }
+        }
+        canvas.width = Math.round(w);
+        canvas.height = Math.round(h);
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        try {
+          const dataUrl = canvas.toDataURL('image/jpeg', quality);
+          resolve(dataUrl);
+        } catch (e) { reject(e); }
+      };
+      img.onerror = reject;
+      img.src = e.target.result;
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
 }
 
 function bindProductCardEvents() {
@@ -488,10 +733,16 @@ function openDetail(id) {
 function renderDetail() {
   const p = PRODUCTS.find(x => x.id === currentProductId);
   if (!p) return;
-  const emoji = guessEmoji(p.name);
-  document.getElementById('detail-emoji').textContent = emoji;
+  renderProductEmojiBox('detail-emoji', p);
+  // 让头像可点 → 改图标
+  const detEmoji = document.getElementById('detail-emoji');
+  if (detEmoji) {
+    detEmoji.style.cursor = 'pointer';
+    detEmoji.onclick = () => openIconPicker();
+  }
   document.getElementById('detail-name').textContent = p.name;
-  document.getElementById('detail-cat').textContent = `${p.category} · ${p.unit}`;
+  const cat = p.categoryId ? getCategoryById(p.categoryId) : null;
+  document.getElementById('detail-cat').textContent = `${cat ? cat.name : ''} · ${p.unit}`;
   document.getElementById('detail-qty').textContent = p.qty;
   document.getElementById('detail-unit').textContent = p.unit;
   document.getElementById('detail-qty-display').textContent = p.qty;
@@ -636,7 +887,9 @@ function openEdit() {
   const p = PRODUCTS.find(x => x.id === currentProductId);
   if (!p) return;
   document.getElementById('edit-name').value = p.name;
-  document.getElementById('edit-category').value = p.category;
+  // select 里存的是分类名(保持 V1 兼容)
+  const cat = p.categoryId ? getCategoryById(p.categoryId) : null;
+  document.getElementById('edit-category').value = cat ? cat.name : '';
   document.getElementById('edit-unit').value = p.unit;
   document.getElementById('edit-cycle').value = p.cycle;
   document.getElementById('edit-usual-price').value = p.usualPrice || '';
@@ -688,7 +941,9 @@ function saveEdit() {
 
 function applyEditToProduct(p, fields) {
   p.name = fields.name;
-  p.category = fields.category;
+  // category 名字 → categoryId
+  const cat = getCategoryByName(fields.category);
+  if (cat) p.categoryId = cat.id;
   p.unit = fields.unit;
   p.cycle = fields.cycle;
   p.usualPrice = fields.usualPrice;
@@ -881,7 +1136,7 @@ function refreshManualSuggestions() {
   wrap.style.display = 'block';
   list.innerHTML = matches.map(p => `
     <button class="suggestion-item" data-id="${p.id}">
-      <span class="em">${guessEmoji(p.name)}</span>
+      <span class="em">${getProductIcon(p)}</span>
       <span class="info">
         <span class="n">${escapeHtml(p.name)}</span>
         <span class="m">剩 ${p.qty} ${p.unit} · 上次 ${fmtYuan(p.usualPrice || 0)}/${p.unit}</span>
@@ -1206,9 +1461,10 @@ let roiData = null;   // 算出来的结果
 function openCalc() {
   const p = PRODUCTS.find(x => x.id === currentProductId);
   if (!p) return;
-  document.getElementById('calc-emoji').textContent = guessEmoji(p.name);
+  renderProductEmojiBox('calc-emoji', p);
   document.getElementById('calc-name').textContent = p.name;
-  document.getElementById('calc-cat').textContent = `${p.category} · ${p.unit}`;
+  const cat = p.categoryId ? getCategoryById(p.categoryId) : null;
+  document.getElementById('calc-cat').textContent = `${cat ? cat.name : ''} · ${p.unit}`;
   // 单位标签
   ['calc-unit-label', 'calc-unit-label2', 'calc-unit-label3'].forEach(id => {
     document.getElementById(id).textContent = '/ ' + p.unit;
@@ -1360,7 +1616,7 @@ function renderCart() {
   clearBtn.style.display = 'flex';
   list.innerHTML = CART.map((c, i) => `
     <div class="cart-item" data-idx="${i}">
-      <div class="em">${guessEmoji(c.name)}</div>
+      <div class="em">${(() => { const prod = PRODUCTS.find(x => x.id === c.productId); return prod ? getProductIcon(prod) : guessEmoji(c.name); })()}</div>
       <div class="info">
         <div class="n">${escapeHtml(c.name)}</div>
         <div class="m">${c.qty} ${c.unit} · 添加于 ${fmtTime(c.addedAt)}</div>
@@ -1402,6 +1658,101 @@ function clearCart() {
       toast('已清空');
     },
   });
+}
+
+/* ------------------------------------------------------------
+   13.5 V2 — 图标选择器 + 上传
+   ------------------------------------------------------------ */
+let iconPickerReturnTo = null;  // 'manual' / 'edit' / 'detail' (关闭后返回)
+
+function openIconPicker() {
+  const p = PRODUCTS.find(x => x.id === currentProductId);
+  if (!p) return;
+  // 记录返回点(返回按钮返回)
+  iconPickerReturnTo = currentScreen;
+  renderIconPickerContent();
+  showScreen('icon-picker');
+}
+
+/* 重新渲染 picker 内容(不切屏,用在上传后刷新图库) */
+function renderIconPickerContent() {
+  const p = PRODUCTS.find(x => x.id === currentProductId);
+  if (!p) return;
+  document.getElementById('iconpicker-product').textContent = p.name;
+  renderProductEmojiBox('iconpicker-current', p);
+
+  // 拼 emoji 区:产品分类下的范本库
+  const cat = p.categoryId ? getCategoryById(p.categoryId) : null;
+  const catName = cat ? cat.name : '其他';
+  const library = EMOJI_LIBRARY[catName] || EMOJI_LIBRARY['其他'];
+  document.getElementById('emoji-section-title').textContent = `分类:${catName}`;
+  const grid = document.getElementById('emoji-grid');
+  grid.innerHTML = library.map(e => `
+    <button class="emoji-cell" data-emoji="${e}">${e}</button>
+  `).join('');
+  grid.querySelectorAll('.emoji-cell').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const e = btn.dataset.emoji;
+      p.emoji = e;
+      p.imageId = null;  // 选了 emoji 后清除自定义图
+      saveProducts();
+      renderProductEmojiBox('iconpicker-current', p);
+      toast('已选 ' + e);
+    });
+  });
+
+  // 自定义图区
+  const customSection = document.getElementById('custom-section');
+  const customGrid = document.getElementById('custom-grid');
+  if (IMAGES_DB.length === 0) {
+    customSection.style.display = 'none';
+  } else {
+    customSection.style.display = 'block';
+    customGrid.innerHTML = IMAGES_DB.map(img => `
+      <button class="emoji-cell image-cell" data-id="${img.id}">
+        <img src="${escapeHtml(img.dataUrl)}" alt="">
+      </button>
+    `).join('');
+    customGrid.querySelectorAll('.emoji-cell').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const id = btn.dataset.id;
+        p.imageId = id;
+        p.emoji = null;
+        saveProducts();
+        renderProductEmojiBox('iconpicker-current', p);
+        toast('已用自定义图');
+      });
+    });
+  }
+}
+
+async function handleImageUpload(file) {
+  if (!file) return;
+  if (!file.type.startsWith('image/')) { toast('请选择图片文件'); return; }
+  try {
+    const dataUrl = await fileToCompressedDataURL(file);
+    const newImg = {
+      id: 'img_' + uid(),
+      dataUrl,
+      createdAt: Date.now(),
+      usedCount: 0,
+    };
+    IMAGES_DB.push(newImg);
+    saveImages();
+    // 立刻应用到当前产品
+    const p = PRODUCTS.find(x => x.id === currentProductId);
+    if (p) {
+      p.imageId = newImg.id;
+      p.emoji = null;
+      saveProducts();
+    }
+    // 重新渲染 picker 内容
+    renderIconPickerContent();
+    toast('已上传');
+  } catch (e) {
+    console.error('upload failed', e);
+    toast('上传失败,请重试');
+  }
 }
 
 /* ------------------------------------------------------------
@@ -1525,6 +1876,37 @@ function bindEvents() {
 
   // ===== 编辑 =====
   document.getElementById('btn-edit-back').addEventListener('click', () => showScreen('detail', { pushHistory: false }));
+
+  // V2: 图标选择器
+  document.getElementById('btn-pick-manual-icon').addEventListener('click', () => {
+    iconPickerReturnTo = 'manual';
+    openIconPicker();
+  });
+  document.getElementById('btn-pick-edit-icon').addEventListener('click', () => {
+    iconPickerReturnTo = 'edit';
+    openIconPicker();
+  });
+  document.getElementById('btn-iconpicker-back').addEventListener('click', () => {
+    const ret = iconPickerReturnTo;
+    iconPickerReturnTo = null;
+    if (ret === 'detail') {
+      // 详情页需要重渲才能看到新头像
+      renderDetail();
+      showScreen('detail', { pushHistory: false });
+    } else if (ret) {
+      showScreen(ret, { pushHistory: false });
+    } else {
+      showScreen('home', { pushHistory: false });
+    }
+    renderHome();  // 主页列表也刷新
+  });
+  document.getElementById('upload-zone').addEventListener('click', () => {
+    document.getElementById('upload-image-input').click();
+  });
+  document.getElementById('upload-image-input').addEventListener('change', (e) => {
+    const f = e.target.files && e.target.files[0];
+    if (f) handleImageUpload(f);
+  });
   document.getElementById('btn-edit-save').addEventListener('click', saveEdit);
   document.getElementById('btn-edit-delete').addEventListener('click', () => {
     confirmDialog({
