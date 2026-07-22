@@ -265,17 +265,17 @@
         <div class="history-card">
           <h4>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
-            购买历史
-            <span style="margin-left:auto; font-weight:400; font-size:11px; color:var(--accent); cursor:pointer; -webkit-tap-highlight-color: rgba(59,130,246,0.2); padding:2px 6px;" id="btn-manage-history">📋 管理全部</span>
+            <span style="flex:1; font-weight:600;">购买历史(只记采购)</span>
+            <span style="font-weight:600; font-size:12px; color:white; background:var(--accent); padding:4px 10px; border-radius:999px; cursor:pointer; -webkit-tap-highlight-color: transparent;" id="btn-manage-history">📋 管理全部</span>
           </h4>
           <div id="history-list"><!-- 动态渲染 --></div>
         </div>
 
-        <div class="history-card">
+        <div class="history-card" style="border-color: var(--primary-border); background: linear-gradient(135deg, #f0fdf4, white);">
           <h4>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
-            库存记录
-            <span style="margin-left:auto; font-weight:400; font-size:11px; color:var(--accent); cursor:pointer; -webkit-tap-highlight-color: rgba(59,130,246,0.2); padding:2px 6px;" id="btn-manage-stock-log">📦 查看全部</span>
+            <span style="flex:1; font-weight:600;">库存记录(所有进出)</span>
+            <span style="font-weight:600; font-size:12px; color:white; background:var(--primary); padding:4px 10px; border-radius:999px; cursor:pointer; -webkit-tap-highlight-color: transparent;" id="btn-manage-stock-log">📦 查看全部</span>
           </h4>
           <div id="stock-log-preview"><!-- 动态渲染 --></div>
         </div>
@@ -566,7 +566,40 @@
                 <input type="text" id="manual-unit" value="盒" placeholder="盒/瓶/包" style="width: 140px; text-align: left; padding: 8px 12px;">
               </div>
             </div>
-            <div class="form-row">
+
+            <!-- V2.2: 最小单位开关 -->
+            <div class="form-row" id="manual-minunit-toggle-row" style="background: var(--bg); border-radius: 10px; margin: 4px 0; padding: 8px 12px;">
+              <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
+                <input type="checkbox" id="manual-minunit-toggle" style="width:18px; height:18px; accent-color: var(--primary);">
+                <span style="font-size:13px;">这个产品有"最小单位"?(如 1 包 = 48 片)</span>
+              </label>
+            </div>
+
+            <div id="manual-minunit-block" style="display:none; background: var(--primary-bg); border-radius: 10px; padding: 12px; margin: -4px 0 8px;">
+              <div class="form-row" style="border-top:none; padding-top:0;">
+                <label style="font-size:12px;">1 份 =</label>
+                <div class="input-group" style="flex:1; justify-content:flex-end; gap:6px;">
+                  <input type="number" id="manual-pack-size" min="1" step="1" value="1" style="width:80px; padding:6px 8px; border:1px solid var(--primary-border); border-radius:8px; font-size:13px; text-align:center;">
+                  <input type="text" id="manual-pack-unit" placeholder="片" style="width:80px; padding:6px 8px; border:1px solid var(--primary-border); border-radius:8px; font-size:13px; color:var(--ink); text-align:left;">
+                </div>
+              </div>
+              <div class="form-row" style="border-top:1px dashed var(--primary-border);">
+                <label style="font-size:12px;">使用频率</label>
+                <div class="input-group" style="flex:1; justify-content:flex-end; gap:4px;">
+                  <input type="number" id="manual-usage-amount" min="0" step="0.1" value="0" style="width:60px; padding:6px 8px; border:1px solid var(--primary-border); border-radius:8px; font-size:13px; text-align:center;">
+                  <span style="font-size:12px;" id="manual-usage-amount-unit">片</span>
+                  <span style="font-size:12px;">/</span>
+                  <span style="font-size:12px;">每</span>
+                  <input type="number" id="manual-usage-period" min="1" step="1" value="1" style="width:50px; padding:6px 8px; border:1px solid var(--primary-border); border-radius:8px; font-size:13px; text-align:center;">
+                  <span style="font-size:12px;">天</span>
+                </div>
+              </div>
+              <div style="font-size:11px; color:var(--ink-2); margin-top:4px; line-height:1.5;">
+                💡 留空 0 = 不可计量(按下面的"天"估算)
+              </div>
+            </div>
+
+            <div class="form-row" id="manual-cycle-row">
               <label>一个能用几天 *</label>
               <div class="input-group">
                 <input type="number" id="manual-cycle" value="30" min="1" step="1">
@@ -662,7 +695,40 @@
               <input type="text" id="edit-unit" style="width: 160px; text-align: left; padding: 8px 12px;">
             </div>
           </div>
-          <div class="form-row">
+
+          <!-- V2.2: 最小单位开关 -->
+          <div class="form-row" id="edit-minunit-toggle-row" style="background: var(--bg); border-radius: 10px; margin: 4px 0; padding: 8px 12px;">
+            <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
+              <input type="checkbox" id="edit-minunit-toggle" style="width:18px; height:18px; accent-color: var(--primary);">
+              <span style="font-size:13px;">这个产品有"最小单位"?(如 1 包 = 48 片)</span>
+            </label>
+          </div>
+
+          <div id="edit-minunit-block" style="display:none; background: var(--primary-bg); border-radius: 10px; padding: 12px; margin: -4px 0 8px;">
+            <div class="form-row" style="border-top:none; padding-top:0;">
+              <label style="font-size:12px;">1 份 =</label>
+              <div class="input-group" style="flex:1; justify-content:flex-end; gap:6px;">
+                <input type="number" id="edit-pack-size" min="1" step="1" value="1" style="width:80px; padding:6px 8px; border:1px solid var(--primary-border); border-radius:8px; font-size:13px; text-align:center;">
+                <input type="text" id="edit-pack-unit" placeholder="片" style="width:80px; padding:6px 8px; border:1px solid var(--primary-border); border-radius:8px; font-size:13px; color:var(--ink); text-align:left;">
+              </div>
+            </div>
+            <div class="form-row" style="border-top:1px dashed var(--primary-border);">
+              <label style="font-size:12px;">使用频率</label>
+              <div class="input-group" style="flex:1; justify-content:flex-end; gap:4px;">
+                <input type="number" id="edit-usage-amount" min="0" step="0.1" value="0" style="width:60px; padding:6px 8px; border:1px solid var(--primary-border); border-radius:8px; font-size:13px; text-align:center;">
+                <span style="font-size:12px;" id="edit-usage-amount-unit">片</span>
+                <span style="font-size:12px;">/</span>
+                <span style="font-size:12px;">每</span>
+                <input type="number" id="edit-usage-period" min="1" step="1" value="1" style="width:50px; padding:6px 8px; border:1px solid var(--primary-border); border-radius:8px; font-size:13px; text-align:center;">
+                <span style="font-size:12px;">天</span>
+              </div>
+            </div>
+            <div style="font-size:11px; color:var(--ink-2); margin-top:4px; line-height:1.5;">
+              💡 留空 0 = 不可计量(按下面的"天"估算)
+            </div>
+          </div>
+
+          <div class="form-row" id="edit-cycle-row">
             <label>一个能用几天 *</label>
             <div class="input-group">
               <input type="number" id="edit-cycle" min="1" step="1" inputmode="numeric">
@@ -791,6 +857,21 @@
             <button type="button" id="adjust-minus" style="width:32px; height:32px; border-radius:50%; background:var(--bg); border:1px solid var(--line); font-size:18px; color:var(--ink); cursor:pointer;">−</button>
             <input type="number" id="adjust-qty" min="0" step="0.1" value="0" style="width:60px; padding:6px 8px; border:1px solid var(--line); border-radius:8px; font-size:15px; text-align:center; color:var(--ink);">
             <button type="button" id="adjust-plus" style="width:32px; height:32px; border-radius:50%; background:var(--bg); border:1px solid var(--line); font-size:18px; color:var(--ink); cursor:pointer;">+</button>
+            <span id="adjust-qty-unit" style="font-size:13px; color:var(--ink-2); min-width:30px;">件</span>
+          </div>
+        </div>
+
+        <div id="adjust-unit-radio-block" style="display:none; padding: 8px 0; border-top: 1px solid var(--line-2);">
+          <label style="font-size:12px; color:var(--ink-2); display:block; margin-bottom:6px;">这次按什么调整?</label>
+          <div style="display:flex; gap:8px;">
+            <label class="reason-opt" style="flex:1; padding:8px 10px;">
+              <input type="radio" name="adjust-unit" value="main" checked>
+              <span style="font-size:12px;" id="adjust-unit-main-label">主单位(包)</span>
+            </label>
+            <label class="reason-opt" style="flex:1; padding:8px 10px;">
+              <input type="radio" name="adjust-unit" value="min">
+              <span style="font-size:12px;" id="adjust-unit-min-label">最小单位(片)</span>
+            </label>
           </div>
         </div>
 

@@ -228,6 +228,20 @@ function migrateV1ToV2() {
   if (changed) saveProducts();
   // 3) V2.1: 补 lastStockUpdate 和 stockLog
   migrateV2ToV2p1();
+  // 4) V2.2: 补 packSize/packUnit/usageAmount/usagePeriodDays
+  migrateV2p1ToV2p2();
+}
+
+/* V2.1 → V2.2: 加最小单位 + 使用频率字段 */
+function migrateV2p1ToV2p2() {
+  let changed = false;
+  for (const p of PRODUCTS) {
+    if (p.packSize === undefined) { p.packSize = 1; changed = true; }
+    if (p.packUnit === undefined) { p.packUnit = null; changed = true; }
+    if (p.usageAmount === undefined) { p.usageAmount = 0; changed = true; }
+    if (p.usagePeriodDays === undefined) { p.usagePeriodDays = 1; changed = true; }
+  }
+  if (changed) saveProducts();
 }
 
 /* V2 → V2.1 迁移:加 lastStockUpdate 和 stockLog */
@@ -386,8 +400,45 @@ function daysSince(dateStr) {
 function getForecastDays(p) {
   if (!p.cycle || p.cycle <= 0) return null;
   const passed = daysSince(p.lastStockUpdate);
-  const totalDays = p.qty * p.cycle;
-  return Math.max(0, totalDays - passed);
+  // V2.2: 区分可计量 vs 不可计量
+  const ps = p.packSize && p.packSize > 0 ? p.packSize : 1;
+  const amt = p.usageAmount && p.usageAmount > 0 ? p.usageAmount : 0;
+  const period = p.usagePeriodDays && p.usagePeriodDays > 0 ? p.usagePeriodDays : 1;
+  if (amt > 0) {
+    // 可计量:剩余天数 = qty * packSize * periodDays / usageAmount
+    const totalMin = p.qty * ps;       // 剩余最小单位数
+    const totalDays = (totalMin * period) / amt;
+    return Math.max(0, Math.floor(totalDays - passed));
+  } else {
+    // 不可计量(老逻辑)
+    const totalDays = p.qty * p.cycle;
+    return Math.max(0, totalDays - passed);
+  }
+}
+
+/* V2.2: 是否有最小单位(供 UI 判断) */
+function hasMinUnit(p) {
+  return !!(p.packSize && p.packSize > 1 && p.packUnit);
+}
+
+/* V2.2: 是否可计量 */
+function isMeasurable(p) {
+  return !!(p.usageAmount && p.usageAmount > 0);
+}
+
+/* V2.2: 获取"主单位下的剩余数量"显示文本 */
+function getQtyText(p) {
+  if (hasMinUnit(p)) {
+    const total = (p.qty || 0) * p.packSize;
+    return `${formatNum(total)} ${p.packUnit}`;
+  }
+  return `${formatNum(p.qty || 0)} ${p.unit}`;
+}
+
+function formatNum(n) {
+  if (n == null) return '0';
+  if (Number.isInteger(n)) return String(n);
+  return Number(n.toFixed(2)).toString();
 }
 
 /* V2.1: 重写状态计算,使用新公式 */
@@ -622,7 +673,13 @@ function renderProductCard(p) {
   const days = getForecastDays(p);
   const icon = getProductIcon(p);
   const statusText = getStatusText(p);
-  const daysText = days != null ? `剩 ${p.qty} ${p.unit} · 预计 ${days} 天后用完` : `剩 ${p.qty} ${p.unit}`;
+  const daysText = days != null
+    ? (hasMinUnit(p)
+        ? `剩 ${formatNum((p.qty || 0) * p.packSize)} ${p.packUnit} · 预计 ${days} 天后用完`
+        : `剩 ${formatNum(p.qty || 0)} ${p.unit} · 预计 ${days} 天后用完`)
+    : (hasMinUnit(p)
+        ? `剩 ${formatNum((p.qty || 0) * p.packSize)} ${p.packUnit}`
+        : `剩 ${formatNum(p.qty || 0)} ${p.unit}`);
   const maxDays = 7;
   const progressPct = days == null ? 100 : Math.max(8, Math.min(100, (days / maxDays) * 100));
 
@@ -827,8 +884,26 @@ function renderDetail() {
   document.getElementById('detail-name').textContent = p.name;
   const cat = p.categoryId ? getCategoryById(p.categoryId) : null;
   document.getElementById('detail-cat').textContent = `${cat ? cat.name : ''} · ${p.unit}`;
-  document.getElementById('detail-qty').textContent = p.qty;
-  document.getElementById('detail-unit').textContent = p.unit;
+  // V2.2: 剩余数量 — 有 packSize 时显示"剩 X 片"
+  if (hasMinUnit(p)) {
+    const totalMin = (p.qty || 0) * p.packSize;
+    document.getElementById('detail-qty').textContent = formatNum(totalMin);
+    document.getElementById('detail-unit').textContent = p.packUnit;
+    // 补一个"= X 包"的子标
+    const subEl = document.getElementById('detail-qty-sub') || (() => {
+      const span = document.createElement('span');
+      span.id = 'detail-qty-sub';
+      span.style.cssText = 'font-size:11px; color:var(--ink-3); margin-left:6px; font-weight:400;';
+      document.getElementById('detail-qty').parentNode.appendChild(span);
+      return span;
+    })();
+    subEl.textContent = `= ${formatNum(p.qty || 0)} ${p.unit}`;
+  } else {
+    document.getElementById('detail-qty').textContent = formatNum(p.qty || 0);
+    document.getElementById('detail-unit').textContent = p.unit;
+    const subEl = document.getElementById('detail-qty-sub');
+    if (subEl) subEl.remove();
+  }
   // 上次盘点日期
   document.getElementById('detail-last-update').textContent = p.lastStockUpdate || '--';
 
@@ -860,11 +935,21 @@ function renderDetail() {
   // 价格统计
   const stats = getPriceStats(p);
   if (stats) {
-    document.getElementById('detail-price-min').textContent = fmtYuan(stats.min);
+    const hasMu = hasMinUnit(p);
+    const setPrice = (id, price) => {
+      if (hasMu) {
+        const main = fmtYuan(price) + '/' + p.unit;
+        const sub = (price / p.packSize).toFixed(2);
+        document.getElementById(id).innerHTML = `${main}<div style="font-size:10px; color:var(--ink-3); font-weight:400; margin-top:2px;">¥${sub}/${p.packUnit}</div>`;
+      } else {
+        document.getElementById(id).textContent = fmtYuan(price);
+      }
+    };
+    setPrice('detail-price-min', stats.min);
     document.getElementById('detail-price-min-date').textContent = fmtMonth(stats.minEntry.date);
-    document.getElementById('detail-price-max').textContent = fmtYuan(stats.max);
+    setPrice('detail-price-max', stats.max);
     document.getElementById('detail-price-max-date').textContent = fmtMonth(stats.lastEntry.date === stats.minEntry ? stats.lastEntry.date : stats.minEntry.date);
-    document.getElementById('detail-price-last').textContent = fmtYuan(stats.last.price);
+    setPrice('detail-price-last', stats.last.price);
     document.getElementById('detail-price-last-date').textContent = fmtMonth(stats.last.date);
   } else {
     document.getElementById('detail-price-min').textContent = '¥--';
@@ -881,13 +966,17 @@ function renderDetail() {
   if (hist.length === 0) {
     histEl.innerHTML = '<div class="history-empty">暂无购买记录</div>';
   } else {
+    const hasMu = hasMinUnit(p);
     histEl.innerHTML = [...hist].reverse().map((h, i) => {
       const realIdx = hist.length - 1 - i;
+      const subPrice = hasMu
+        ? `<div style="font-size:9px; color:var(--ink-3); font-weight:400; margin-top:1px;">¥${(h.price / p.packSize).toFixed(2)}/${p.packUnit}</div>`
+        : '';
       return `
       <div class="history-row clickable" data-idx="${realIdx}">
         <div class="date">${fmtDate(h.date)}</div>
-        <div class="qty">${h.qty} ${p.unit}</div>
-        <div class="price">${h.star ? '<span class="star">⭐</span>' : ''}${fmtYuan(h.price)}</div>
+        <div class="qty">${h.qty} ${p.unit}${hasMu ? ` <span style="font-size:9px; color:var(--ink-3);">(${h.qty * p.packSize} ${p.packUnit})</span>` : ''}</div>
+        <div class="price">${h.star ? '<span class="star">⭐</span>' : ''}${fmtYuan(h.price)}${subPrice}</div>
       </div>
     `;
     }).join('');
@@ -963,12 +1052,30 @@ function stockLogReasonText(r) {
 function openAdjustModal() {
   const p = PRODUCTS.find(x => x.id === currentProductId);
   if (!p) return;
+  const hasMu = hasMinUnit(p);
   document.getElementById('adjust-product-name').textContent = p.name + ' · ' + p.unit;
-  document.getElementById('adjust-current').textContent = p.qty + ' ' + p.unit;
+  // V2.2: 有 packSize 时显示"= X 包"
+  if (hasMu) {
+    document.getElementById('adjust-current').textContent = `${formatNum(p.qty)} ${p.unit} (= ${formatNum(p.qty * p.packSize)} ${p.packUnit})`;
+  } else {
+    document.getElementById('adjust-current').textContent = `${formatNum(p.qty)} ${p.unit}`;
+  }
   document.getElementById('adjust-qty').value = p.qty;
+  // V2.2: 单位标签
+  document.getElementById('adjust-qty-unit').textContent = p.unit;
   document.getElementById('adjust-note').value = '';
   // 默认选“日常消耗”
   document.querySelector('input[name="adjust-reason"][value="consumed"]').checked = true;
+  // V2.2: 单位选择 radio(有 packSize 才显示)
+  const unitRadioBlock = document.getElementById('adjust-unit-radio-block');
+  if (hasMu) {
+    unitRadioBlock.style.display = 'block';
+    document.getElementById('adjust-unit-main-label').textContent = `主单位(${p.unit})`;
+    document.getElementById('adjust-unit-min-label').textContent = `最小单位(${p.packUnit})`;
+    document.querySelector('input[name="adjust-unit"][value="main"]').checked = true;
+  } else {
+    unitRadioBlock.style.display = 'none';
+  }
   document.getElementById('adjust-backdrop').style.display = 'flex';
   document.getElementById('adjust-qty').focus();
 }
@@ -987,23 +1094,30 @@ function changeAdjustQty(delta) {
 function saveAdjust() {
   const p = PRODUCTS.find(x => x.id === currentProductId);
   if (!p) return;
-  const newQty = parseFloat(document.getElementById('adjust-qty').value);
+  let inputVal = parseFloat(document.getElementById('adjust-qty').value);
   const reason = document.querySelector('input[name="adjust-reason"]:checked')?.value || 'correction';
   const note = document.getElementById('adjust-note').value.trim();
-  if (isNaN(newQty) || newQty < 0) { toast('请填有效的数量'); return; }
-  const delta = Number((newQty - p.qty).toFixed(2));
+  if (isNaN(inputVal) || inputVal < 0) { toast('请填有效的数量'); return; }
+  // V2.2: 按最小单位输入时,换算成主单位
+  const hasMu = hasMinUnit(p);
+  const unitChoice = document.querySelector('input[name="adjust-unit"]:checked')?.value || 'main';
+  if (hasMu && unitChoice === 'min') {
+    // 24 片 / 48 片每包 = 0.5 包
+    inputVal = Number((inputVal / p.packSize).toFixed(4));
+  }
+  const delta = Number((inputVal - p.qty).toFixed(2));
   if (delta === 0) { toast('数量没变化'); closeAdjustModal(); return; }
   // 特殊:扔掉 → 强制归 0
-  let finalQty = newQty;
+  let finalQty = inputVal;
   if (reason === 'expired') finalQty = 0;
   const finalDelta = Number((finalQty - p.qty).toFixed(2));
   p.qty = finalQty;
   // lastStockUpdate 规则: 补货/修正/扔掉 → 今天; 日常消耗 → 不更新
   if (reason !== 'consumed') p.lastStockUpdate = todayStr();
-  // 补货 → 也写 purchaseHistory
+  // 补货 → 也写 purchaseHistory(按主单位记)
   if (reason === 'purchase' && finalDelta > 0) {
     // 需要价格,弹个手输入
-    const price = parseFloat(prompt(`这次补货的单价?(取消将不记录价格)`, p.usualPrice || ''));
+    const price = parseFloat(prompt(`这次补货的单价(每${p.unit})?(取消将不记录价格)`, p.usualPrice || ''));
     if (!isNaN(price) && price > 0) {
       p.history = p.history || [];
       p.history.push({ date: todayStr(), qty: finalDelta, price });
@@ -1123,6 +1237,15 @@ function openEdit() {
   document.getElementById('edit-unit').value = p.unit;
   document.getElementById('edit-cycle').value = p.cycle;
   document.getElementById('edit-usual-price').value = p.usualPrice || '';
+  // V2.2: 最小单位 + 频率
+  const hasMu = !!(p.packUnit);
+  document.getElementById('edit-minunit-toggle').checked = hasMu;
+  document.getElementById('edit-pack-size').value = p.packSize || 1;
+  document.getElementById('edit-pack-unit').value = p.packUnit || '';
+  document.getElementById('edit-usage-amount').value = p.usageAmount || 0;
+  document.getElementById('edit-usage-period').value = p.usagePeriodDays || 1;
+  updateMinUnitBlock('edit');
+  syncUsageUnitLabel('edit');
   showScreen('edit');
 }
 
@@ -1156,6 +1279,7 @@ function saveEdit() {
   }
 
   // 普通保存
+  const mu = readMinUnitFields('edit');
   applyEditToProduct(p, {
     name: newName,
     category: document.getElementById('edit-category').value,
@@ -1163,6 +1287,11 @@ function saveEdit() {
     cycle,
     usualPrice: parseFloat(document.getElementById('edit-usual-price').value) || p.usualPrice || 0,
   });
+  // V2.2: 同步最小单位 + 频率
+  p.packSize = mu.packSize;
+  p.packUnit = mu.packUnit;
+  p.usageAmount = mu.usageAmount;
+  p.usagePeriodDays = mu.usagePeriodDays;
   saveProducts();
   renderDetail();
   showScreen('detail', { pushHistory: false });
@@ -1353,11 +1482,38 @@ function openManual(prefill = {}) {
   document.getElementById('manual-category').value = '食品';
   document.getElementById('manual-unit-label').textContent = document.getElementById('manual-unit').value;
 
+  // V2.2: 最小单位 默认不勾
+  const mToggle = document.getElementById('manual-minunit-toggle');
+  if (mToggle) mToggle.checked = false;
+  updateMinUnitBlock('manual');
+  // 同步单位文字
+  syncUsageUnitLabel('manual');
+
   // 候选
   refreshManualSuggestions();
   updateManualNewFields();
 
   showScreen('manual');
+}
+
+/* V2.2: 切换"最小单位"块显示 + 显示/隐藏 cycle 输入 */
+function updateMinUnitBlock(prefix) {
+  const toggle = document.getElementById(prefix + '-minunit-toggle');
+  const block = document.getElementById(prefix + '-minunit-block');
+  const cycleRow = document.getElementById(prefix + '-cycle-row');
+  if (!toggle || !block || !cycleRow) return;
+  const on = toggle.checked;
+  block.style.display = on ? 'block' : 'none';
+  // 勾上时,cycle 输入依然可见(作为不可计量的 fallback)
+}
+
+function syncUsageUnitLabel(prefix) {
+  const packUnit = document.getElementById(prefix + '-pack-unit');
+  const label = document.getElementById(prefix + '-usage-amount-unit');
+  if (packUnit && label) {
+    const u = packUnit.value.trim() || '份';
+    label.textContent = u;
+  }
 }
 
 function refreshManualSuggestions() {
@@ -1430,6 +1586,14 @@ function saveManual() {
 
   if (manualMode === 'append' && manualTargetProduct) {
     const p = manualTargetProduct;
+    // 同款追加:可能顺便改 packSize(用户首次设了最小单位)
+    const minUnit = readMinUnitFields('manual');
+    if (minUnit.enabled) {
+      p.packSize = minUnit.packSize;
+      p.packUnit = minUnit.packUnit;
+      p.usageAmount = minUnit.usageAmount;
+      p.usagePeriodDays = minUnit.usagePeriodDays;
+    }
     recordPurchase(p, qty, price, date);
     renderHome();
     goBackToHome();
@@ -1439,6 +1603,7 @@ function saveManual() {
     const cycle = parseInt(document.getElementById('manual-cycle').value, 10) || 30;
     const category = document.getElementById('manual-category').value;
     const cat = getCategoryByName(category);
+    const mu = readMinUnitFields('manual');
     const newP = {
       id: uid(),
       name,
@@ -1447,6 +1612,10 @@ function saveManual() {
       imageId: null,
       unit,
       cycle,
+      packSize: mu.packSize,
+      packUnit: mu.packUnit,
+      usageAmount: mu.usageAmount,
+      usagePeriodDays: mu.usagePeriodDays,
       qty: 0,         // 初始 0,再 recordPurchase 加
       lastStockUpdate: todayStr(),
       usualPrice: price,
@@ -1459,6 +1628,20 @@ function saveManual() {
     goBackToHome();
     toast('已保存到库存');
   }
+}
+
+/* V2.2: 读 manual/edit 表单的最小单位 + 频率字段 */
+function readMinUnitFields(prefix) {
+  const toggle = document.getElementById(prefix + '-minunit-toggle');
+  const on = !!(toggle && toggle.checked);
+  const ps = parseInt(document.getElementById(prefix + '-pack-size').value, 10) || 1;
+  const pu = (document.getElementById(prefix + '-pack-unit').value || '').trim();
+  const amt = parseFloat(document.getElementById(prefix + '-usage-amount').value) || 0;
+  const pd = parseInt(document.getElementById(prefix + '-usage-period').value, 10) || 1;
+  if (on && pu) {
+    return { enabled: true, packSize: ps, packUnit: pu, usageAmount: amt, usagePeriodDays: pd };
+  }
+  return { enabled: false, packSize: 1, packUnit: null, usageAmount: 0, usagePeriodDays: 1 };
 }
 
 /* 保存后强制返回首页(跳详情会让人以为“未生效”重复点) */
@@ -2108,6 +2291,12 @@ function bindEvents() {
   document.getElementById('manual-unit').addEventListener('input', (e) => {
     document.getElementById('manual-unit-label').textContent = e.target.value || '件';
   });
+
+  // V2.2: 最小单位 toggle
+  document.getElementById('manual-minunit-toggle').addEventListener('change', () => updateMinUnitBlock('manual'));
+  document.getElementById('manual-pack-unit').addEventListener('input', () => syncUsageUnitLabel('manual'));
+  document.getElementById('edit-minunit-toggle').addEventListener('change', () => updateMinUnitBlock('edit'));
+  document.getElementById('edit-pack-unit').addEventListener('input', () => syncUsageUnitLabel('edit'));
 
   // ===== 编辑 =====
   document.getElementById('btn-edit-back').addEventListener('click', () => showScreen('detail', { pushHistory: false }));
