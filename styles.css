@@ -1393,7 +1393,61 @@ a { color: var(--accent); text-decoration: none; }
 
 .cart-remove:active { opacity: 0.6; }
 
-/* V2: emoji 选择器网格 */
+/* V2.1: 库存记录行 */
+.stock-log-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 0;
+  border-top: 1px solid var(--line-2);
+  font-size: 12px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: rgba(59, 130, 246, 0.1);
+}
+.stock-log-row:first-of-type { border-top: none; }
+.stock-log-row:active { background: var(--line-2); margin: 0 -8px; padding-left: 8px; padding-right: 8px; border-radius: 8px; }
+
+.stock-log-row .delta {
+  font-weight: 700;
+  min-width: 36px;
+  text-align: center;
+  padding: 2px 6px;
+  border-radius: 6px;
+  font-size: 11px;
+}
+.stock-log-row .delta.in { background: var(--success-bg); color: var(--success); }
+.stock-log-row .delta.out { background: var(--line-2); color: var(--ink-2); }
+.stock-log-row .info { flex: 1; min-width: 0; }
+.stock-log-row .info .top { font-weight: 600; color: var(--ink); }
+.stock-log-row .info .sub { font-size: 11px; color: var(--ink-3); margin-top: 2px; }
+.stock-log-row .bal { font-size: 12px; color: var(--ink-2); text-align: right; }
+
+/* V2.1: 调整原因 radio 样式 */
+.reason-opt {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--bg);
+  border: 1.5px solid transparent;
+  border-radius: 10px;
+  cursor: pointer;
+  font-size: 13px;
+  -webkit-tap-highlight-color: transparent;
+  transition: border-color 0.1s;
+}
+.reason-opt:active { background: var(--line-2); }
+.reason-opt input[type="radio"] {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--primary);
+  margin: 0;
+}
+.reason-opt:has(input:checked) {
+  background: var(--primary-bg);
+  border-color: var(--primary);
+}
+
 .emoji-grid {
   display: grid;
   grid-template-columns: repeat(5, 1fr);

@@ -226,6 +226,72 @@ function migrateV1ToV2() {
     if (p.imageId === undefined) p.imageId = null;
   }
   if (changed) saveProducts();
+  // 3) V2.1: 补 lastStockUpdate 和 stockLog
+  migrateV2ToV2p1();
+}
+
+/* V2 → V2.1 迁移:加 lastStockUpdate 和 stockLog */
+function migrateV2ToV2p1() {
+  let changed = false;
+  for (const p of PRODUCTS) {
+    if (p.lastStockUpdate === undefined) {
+      // 初始 = 最后一个 history 条目的 date, 或今天
+      const hist = p.history || [];
+      let lastDate = todayStr();
+      if (hist.length > 0) {
+        // 取最新一条
+        const sorted = [...hist].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+        lastDate = sorted[0].date || lastDate;
+      }
+      p.lastStockUpdate = lastDate;
+      changed = true;
+    }
+    if (!p.stockLog) {
+      // 从 history 推一条初始 log
+      p.stockLog = [];
+      if (p.history && p.history.length > 0) {
+        // 只插一条"初始采购"表示这个数量是什么时候到位的
+        const last = [...p.history].sort((a, b) => (b.date || '').localeCompare(a.date || ''))[0];
+        p.stockLog.push({
+          date: last.date || p.lastStockUpdate,
+          delta: last.qty || p.qty,
+          reason: 'purchase',
+          note: '历史记录迁移',
+          balance: p.qty,
+        });
+      }
+      changed = true;
+    }
+  }
+  if (changed) saveProducts();
+}
+
+/* V2.1: 推一条 stockLog(不保存,调用方自己 save) */
+function pushStockLog(p, delta, reason, note = '') {
+  if (!p.stockLog) p.stockLog = [];
+  const balance = Math.max(0, p.qty);
+  p.stockLog.push({
+    date: todayStr(),
+    delta,
+    reason,
+    note,
+    balance,
+  });
+}
+
+/* 采购入库专用(同写 purchaseHistory + stockLog) */
+function recordPurchase(p, qty, price, date) {
+  p.history = p.history || [];
+  p.history.push({ date, qty, price });
+  // 重算 star
+  const prices = p.history.map(h => h.price);
+  const min = Math.min(...prices);
+  p.history.forEach(h => { h.star = (h.price === min); });
+  p.qty = (p.qty || 0) + qty;
+  p.lastStockUpdate = date;
+  p.usualPrice = price;
+  pushStockLog(p, qty, 'purchase');
+  saveProducts();
 }
 
 function saveProducts() {
@@ -304,9 +370,31 @@ function seedProducts() {
 /* ------------------------------------------------------------
    3. 业务计算
    ------------------------------------------------------------ */
+
+/* V2.1: 计算从 lastStockUpdate 到今天过了几天 */
+function daysSince(dateStr) {
+  if (!dateStr) return 0;
+  const d = new Date(dateStr);
+  if (isNaN(d)) return 0;
+  const now = new Date();
+  const diffMs = now - d;
+  return Math.max(0, Math.floor(diffMs / (1000 * 60 * 60 * 24)));
+}
+
+/* V2.1: 重写预计剩余天数,使用 lastStockUpdate
+   剩余总天数 = qty * cycle - days_since,最低 0 */
+function getForecastDays(p) {
+  if (!p.cycle || p.cycle <= 0) return null;
+  const passed = daysSince(p.lastStockUpdate);
+  const totalDays = p.qty * p.cycle;
+  return Math.max(0, totalDays - passed);
+}
+
+/* V2.1: 重写状态计算,使用新公式 */
 function getStatus(p) {
   if (!p.cycle || p.cycle <= 0) return 'ok';
-  const days = p.qty * p.cycle;
+  const days = getForecastDays(p);
+  if (days == null) return 'ok';
   if (days <= 3) return 'urgent';
   if (days <= 7) return 'warn';
   return 'ok';
@@ -317,11 +405,6 @@ function getStatusText(p) {
   if (s === 'urgent') return '紧急';
   if (s === 'warn') return '注意';
   return '充足';
-}
-
-function getForecastDays(p) {
-  if (!p.cycle || p.cycle <= 0) return null;
-  return Math.max(0, Math.round(p.qty * p.cycle));
 }
 
 function sortByUrgency(list) {
@@ -362,7 +445,7 @@ function findSimilar(query) {
 /* ------------------------------------------------------------
    4. 页面导航
    ------------------------------------------------------------ */
-const SCREENS = ['home', 'scan', 'gemini', 'detail', 'roi', 'paste', 'calc', 'manual', 'edit', 'cart', 'history', 'icon-picker'];
+const SCREENS = ['home', 'scan', 'gemini', 'detail', 'roi', 'paste', 'calc', 'manual', 'edit', 'cart', 'history', 'icon-picker', 'stock-log'];
 let currentScreen = 'home';
 let screenHistory = ['home'];
 
@@ -441,6 +524,7 @@ const PARENT = {
   edit: 'detail',
   history: 'detail',
   'icon-picker': null,  // 动态: 可能是 manual / edit / detail
+  'stock-log': 'detail',
 };
 
 function goBack() {
@@ -745,15 +829,11 @@ function renderDetail() {
   document.getElementById('detail-cat').textContent = `${cat ? cat.name : ''} · ${p.unit}`;
   document.getElementById('detail-qty').textContent = p.qty;
   document.getElementById('detail-unit').textContent = p.unit;
-  document.getElementById('detail-qty-display').textContent = p.qty;
-  document.getElementById('detail-qty-direct').value = '';
+  // 上次盘点日期
+  document.getElementById('detail-last-update').textContent = p.lastStockUpdate || '--';
 
-  // 草稿状态
-  const dirty = draftQty !== p.qty;
-  document.getElementById('qty-dirty').style.display = dirty ? 'block' : 'none';
-
-  // 预测
-  const days = getForecastDays({ ...p, qty: draftQty });
+  // V2.1: 预测(用 lastStockUpdate 真实倒数)
+  const days = getForecastDays(p);
   const forecastEl = document.getElementById('detail-forecast');
   const daysEl = document.getElementById('detail-forecast-days');
   if (days == null) {
@@ -773,6 +853,9 @@ function renderDetail() {
       forecastEl.lastElementChild.innerHTML = `预计 <strong id="detail-forecast-days">${days}</strong> 天后用完,库存充足`;
     }
   }
+
+  // V2.1: 库存记录预览(最近 3 条)
+  renderStockLogPreview(p);
 
   // 价格统计
   const stats = getPriceStats(p);
@@ -817,49 +900,6 @@ function renderDetail() {
   }
 }
 
-function changeQty(delta) {
-  const p = PRODUCTS.find(x => x.id === currentProductId);
-  if (!p) return;
-  draftQty = Math.max(0, Number((draftQty + delta).toFixed(2)));
-  document.getElementById('detail-qty-display').textContent = draftQty;
-  document.getElementById('detail-qty').textContent = draftQty;
-  // 更新 dirty 提示
-  document.getElementById('qty-dirty').style.display = (draftQty !== p.qty) ? 'block' : 'none';
-  // 更新预测
-  const days = getForecastDays({ ...p, qty: draftQty });
-  const daysEl = document.getElementById('detail-forecast-days');
-  if (days != null) daysEl.textContent = days;
-}
-
-function saveQty() {
-  const p = PRODUCTS.find(x => x.id === currentProductId);
-  if (!p) return;
-  // 草稿模式:草稿 = 当前才报错
-  if (draftQty === p.qty) {
-    toast('没变化,不用保存');
-    return;
-  }
-  p.qty = draftQty;
-  saveProducts();
-  document.getElementById('qty-dirty').style.display = 'none';
-  toast('已保存');
-  // 刷新预测样式
-  renderDetail();
-}
-
-function directInputQty(val) {
-  if (val === '' || isNaN(val)) return;
-  draftQty = Math.max(0, Number(val));
-  const p = PRODUCTS.find(x => x.id === currentProductId);
-  if (!p) return;
-  document.getElementById('detail-qty-display').textContent = draftQty;
-  document.getElementById('detail-qty').textContent = draftQty;
-  document.getElementById('qty-dirty').style.display = (draftQty !== p.qty) ? 'block' : 'none';
-  const days = getForecastDays({ ...p, qty: draftQty });
-  const daysEl = document.getElementById('detail-forecast-days');
-  if (days != null) daysEl.textContent = days;
-}
-
 function deleteCurrentProduct() {
   if (!currentProductId) return;
   const p = PRODUCTS.find(x => x.id === currentProductId);
@@ -880,9 +920,199 @@ function deleteCurrentProduct() {
   });
 }
 
-/* ------------------------------------------------------------
-   8. 编辑产品页
-   ------------------------------------------------------------ */
+/* V2.1: 库存记录预览(详情页底部) */
+function renderStockLogPreview(p) {
+  const el = document.getElementById('stock-log-preview');
+  if (!el) return;
+  const log = p.stockLog || [];
+  if (log.length === 0) {
+    el.innerHTML = '<div class="history-empty">暂无记录</div>';
+    return;
+  }
+  const recent = [...log].reverse().slice(0, 3);
+  el.innerHTML = recent.map(e => renderStockLogRow(e, p)).join('');
+  // 不绑事件(预览不可点 → 跳全列表)
+}
+
+function renderStockLogRow(e, p) {
+  const inOut = e.delta >= 0;
+  const sign = inOut ? '+' : '';
+  return `
+    <div class="stock-log-row">
+      <div class="delta ${inOut ? 'in' : 'out'}">${sign}${e.delta}</div>
+      <div class="info">
+        <div class="top">${stockLogReasonText(e.reason)}${e.note ? ' · ' + escapeHtml(e.note) : ''}</div>
+        <div class="sub">${fmtDate(e.date)}</div>
+      </div>
+      <div class="bal">余额 ${e.balance} ${p.unit}</div>
+    </div>
+  `;
+}
+
+function stockLogReasonText(r) {
+  const map = {
+    purchase: '📥 补货入库',
+    consumed: '🍽 日常消耗',
+    correction: '✏️ 修正实际数量',
+    expired: '🗑 已用完/过期',
+  };
+  return map[r] || r;
+}
+
+/* V2.1: 打开调整数量模态 */
+function openAdjustModal() {
+  const p = PRODUCTS.find(x => x.id === currentProductId);
+  if (!p) return;
+  document.getElementById('adjust-product-name').textContent = p.name + ' · ' + p.unit;
+  document.getElementById('adjust-current').textContent = p.qty + ' ' + p.unit;
+  document.getElementById('adjust-qty').value = p.qty;
+  document.getElementById('adjust-note').value = '';
+  // 默认选“日常消耗”
+  document.querySelector('input[name="adjust-reason"][value="consumed"]').checked = true;
+  document.getElementById('adjust-backdrop').style.display = 'flex';
+  document.getElementById('adjust-qty').focus();
+}
+
+function closeAdjustModal() {
+  document.getElementById('adjust-backdrop').style.display = 'none';
+}
+
+function changeAdjustQty(delta) {
+  const inp = document.getElementById('adjust-qty');
+  const cur = parseFloat(inp.value) || 0;
+  const next = Math.max(0, Number((cur + delta).toFixed(2)));
+  inp.value = next;
+}
+
+function saveAdjust() {
+  const p = PRODUCTS.find(x => x.id === currentProductId);
+  if (!p) return;
+  const newQty = parseFloat(document.getElementById('adjust-qty').value);
+  const reason = document.querySelector('input[name="adjust-reason"]:checked')?.value || 'correction';
+  const note = document.getElementById('adjust-note').value.trim();
+  if (isNaN(newQty) || newQty < 0) { toast('请填有效的数量'); return; }
+  const delta = Number((newQty - p.qty).toFixed(2));
+  if (delta === 0) { toast('数量没变化'); closeAdjustModal(); return; }
+  // 特殊:扔掉 → 强制归 0
+  let finalQty = newQty;
+  if (reason === 'expired') finalQty = 0;
+  const finalDelta = Number((finalQty - p.qty).toFixed(2));
+  p.qty = finalQty;
+  // lastStockUpdate 规则: 补货/修正/扔掉 → 今天; 日常消耗 → 不更新
+  if (reason !== 'consumed') p.lastStockUpdate = todayStr();
+  // 补货 → 也写 purchaseHistory
+  if (reason === 'purchase' && finalDelta > 0) {
+    // 需要价格,弹个手输入
+    const price = parseFloat(prompt(`这次补货的单价?(取消将不记录价格)`, p.usualPrice || ''));
+    if (!isNaN(price) && price > 0) {
+      p.history = p.history || [];
+      p.history.push({ date: todayStr(), qty: finalDelta, price });
+      const prices = p.history.map(h => h.price);
+      const min = Math.min(...prices);
+      p.history.forEach(h => { h.star = (h.price === min); });
+      p.usualPrice = price;
+    }
+  }
+  pushStockLog(p, finalDelta, reason, note);
+  saveProducts();
+  renderDetail();
+  renderHome();
+  closeAdjustModal();
+  toast('已保存');
+}
+
+/* V2.1: 库存记录全列表页 */
+function openStockLogPage() {
+  const p = PRODUCTS.find(x => x.id === currentProductId);
+  if (!p) return;
+  renderStockLogPage();
+  showScreen('stock-log');
+}
+
+function renderStockLogPage() {
+  const p = PRODUCTS.find(x => x.id === currentProductId);
+  if (!p) return;
+  const log = p.stockLog || [];
+  document.getElementById('stocklog-sub').textContent = `${p.name} · 共 ${log.length} 条记录`;
+  const list = document.getElementById('stocklog-list');
+  const empty = document.getElementById('stocklog-empty');
+  if (log.length === 0) {
+    list.innerHTML = '';
+    empty.style.display = 'block';
+    return;
+  }
+  empty.style.display = 'none';
+  // 时间倒序
+  const sorted = [...log].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+  list.innerHTML = sorted.map((e, i) => {
+    const realIdx = log.length - 1 - sorted.findIndex(x => x === e);  // 倒序后的 index → 原始 index
+    return renderStockLogRowWithData(realIdx, e, p);
+  }).join('');
+  list.querySelectorAll('.stock-log-row').forEach(el => {
+    el.addEventListener('click', () => {
+      const idx = parseInt(el.dataset.idx, 10);
+      openStockLogEditor(idx);
+    });
+  });
+}
+
+function renderStockLogRowWithData(idx, e, p) {
+  const inOut = e.delta >= 0;
+  const sign = inOut ? '+' : '';
+  return `
+    <div class="stock-log-row" data-idx="${idx}">
+      <div class="delta ${inOut ? 'in' : 'out'}">${sign}${e.delta}</div>
+      <div class="info">
+        <div class="top">${stockLogReasonText(e.reason)}${e.note ? ' · ' + escapeHtml(e.note) : ''}</div>
+        <div class="sub">${fmtDate(e.date)}</div>
+      </div>
+      <div class="bal">余额 ${e.balance} ${p.unit}</div>
+    </div>
+  `;
+}
+
+/* V2.1: 库存记录编辑(简化版:只改备注/删除) */
+let editingStockLogIdx = -1;
+function openStockLogEditor(idx) {
+  const p = PRODUCTS.find(x => x.id === currentProductId);
+  if (!p || !p.stockLog || !p.stockLog[idx]) return;
+  editingStockLogIdx = idx;
+  const e = p.stockLog[idx];
+  // 复用 hist-edit modal (改个名称)
+  document.getElementById('hist-edit-modal').querySelector('h3').textContent = '编辑库存记录';
+  document.getElementById('hist-edit-date').value = e.date;
+  document.getElementById('hist-edit-date').parentElement.parentElement.style.display = 'none';  // 隐藏日期
+  document.getElementById('hist-edit-qty').value = e.delta;
+  document.getElementById('hist-edit-qty').parentElement.parentElement.style.display = '';     // 显示 delta
+  document.getElementById('hist-edit-qty').parentElement.querySelector('span').textContent = e.delta >= 0 ? '(变化量)' : '';
+  document.getElementById('hist-edit-price').value = 0;
+  document.getElementById('hist-edit-price').parentElement.parentElement.style.display = 'none';  // 隐藏价格
+  // 加备注 input —— 但现有 modal 没这栏。简化: 只保留删除功能,改备注改成弹 prompt
+  const note = prompt('备注(取消不改):', e.note || '');
+  if (note !== null) {
+    e.note = note;
+    saveProducts();
+    renderStockLogPage();
+    renderDetail();
+  }
+  // 不用 modal,直接 prompt
+  document.getElementById('hist-edit-modal').querySelector('h3').textContent = '编辑购买记录';  // 还原
+}
+
+function deleteStockLogEntry() {
+  // 简化: 弹 confirm 删
+  const p = PRODUCTS.find(x => x.id === currentProductId);
+  if (!p || editingStockLogIdx < 0) return;
+  const e = p.stockLog[editingStockLogIdx];
+  if (!e) return;
+  if (!confirm(`删除这条记录?\n${fmtDate(e.date)} · ${stockLogReasonText(e.reason)} · ${e.delta}`)) return;
+  p.stockLog.splice(editingStockLogIdx, 1);
+  saveProducts();
+  renderStockLogPage();
+  renderDetail();
+  toast('已删除');
+}
+
 function openEdit() {
   const p = PRODUCTS.find(x => x.id === currentProductId);
   if (!p) return;
@@ -949,7 +1179,7 @@ function applyEditToProduct(p, fields) {
   p.usualPrice = fields.usualPrice;
 }
 
-/* 合并两个产品:把 dup 的 qty + history 合到 p 上,删 dup */
+/* 合并两个产品:把 dup 的 qty + history + stockLog 合到 p 上,删 dup */
 function doMergeProducts(p, dup, newFields) {
   // 更新 p 的元信息
   applyEditToProduct(p, newFields);
@@ -961,8 +1191,18 @@ function doMergeProducts(p, dup, newFields) {
     p.history = p.history.concat(dup.history);
     p.history.sort((a, b) => (a.date || '').localeCompare(b.date || ''));
   }
+  // 合并 stockLog
+  p.stockLog = p.stockLog || [];
+  if (dup.stockLog && dup.stockLog.length > 0) {
+    p.stockLog = p.stockLog.concat(dup.stockLog);
+    p.stockLog.sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+  }
   // usualPrice 取两者中较新的(保留 p 的,只有 p 没设才用 dup 的)
   p.usualPrice = p.usualPrice || dup.usualPrice || 0;
+  // lastStockUpdate 取较新的
+  if (dup.lastStockUpdate && (!p.lastStockUpdate || dup.lastStockUpdate > p.lastStockUpdate)) {
+    p.lastStockUpdate = dup.lastStockUpdate;
+  }
   // 重算 star
   if (p.history.length > 0) {
     const prices = p.history.map(h => h.price);
@@ -1190,11 +1430,7 @@ function saveManual() {
 
   if (manualMode === 'append' && manualTargetProduct) {
     const p = manualTargetProduct;
-    p.qty = (p.qty || 0) + qty;
-    p.history = p.history || [];
-    p.history.push({ date, qty, price });
-    p.usualPrice = p.usualPrice || price;
-    saveProducts();
+    recordPurchase(p, qty, price, date);
     renderHome();
     goBackToHome();
     toast('已加入库存');
@@ -1202,18 +1438,23 @@ function saveManual() {
     const unit = document.getElementById('manual-unit').value.trim() || guessUnit(name) || '件';
     const cycle = parseInt(document.getElementById('manual-cycle').value, 10) || 30;
     const category = document.getElementById('manual-category').value;
+    const cat = getCategoryByName(category);
     const newP = {
       id: uid(),
       name,
-      category,
+      categoryId: cat ? cat.id : (CATEGORIES_DB[0] && CATEGORIES_DB[0].id),
+      emoji: null,
+      imageId: null,
       unit,
       cycle,
-      qty,
+      qty: 0,         // 初始 0,再 recordPurchase 加
+      lastStockUpdate: todayStr(),
       usualPrice: price,
-      history: [{ date, qty, price }],
+      history: [],
+      stockLog: [],
     };
     PRODUCTS.push(newP);
-    saveProducts();
+    recordPurchase(newP, qty, price, date);  // 加库存 + 写 history + 写 stockLog
     renderHome();
     goBackToHome();
     toast('已保存到库存');
@@ -1308,11 +1549,7 @@ function nextFromPaste() {
       body: `家里已有"${name}",要加 ${qty} 个到现有库存吗?`,
       confirmText: '加进去',
       onConfirm: () => {
-        exact.qty = (exact.qty || 0) + qty;
-        exact.history = exact.history || [];
-        exact.history.push({ date, qty, price });
-        exact.usualPrice = exact.usualPrice || price;
-        saveProducts();
+        recordPurchase(exact, qty, price, date);
         renderHome();
         goBackToHome();
         toast('已加入库存');
@@ -1842,10 +2079,8 @@ function bindEvents() {
 
   // ===== 详情页 =====
   document.getElementById('btn-detail-back').addEventListener('click', () => goBack() || showScreen('home'));
-  document.getElementById('btn-qty-minus').addEventListener('click', () => changeQty(-1));
-  document.getElementById('btn-qty-plus').addEventListener('click', () => changeQty(1));
-  document.getElementById('btn-qty-save').addEventListener('click', saveQty);
-  document.getElementById('detail-qty-direct').addEventListener('input', (e) => directInputQty(e.target.value));
+  document.getElementById('btn-adjust-qty').addEventListener('click', openAdjustModal);
+  document.getElementById('btn-manage-stock-log').addEventListener('click', openStockLogPage);
   document.getElementById('btn-edit-product').addEventListener('click', openEdit);
   document.getElementById('btn-delete-product').addEventListener('click', deleteCurrentProduct);
   document.getElementById('btn-go-roi').addEventListener('click', openCalc);
@@ -1907,6 +2142,18 @@ function bindEvents() {
     const f = e.target.files && e.target.files[0];
     if (f) handleImageUpload(f);
   });
+
+  // V2.1: 调整数量 modal
+  document.getElementById('adjust-minus').addEventListener('click', () => changeAdjustQty(-1));
+  document.getElementById('adjust-plus').addEventListener('click', () => changeAdjustQty(1));
+  document.getElementById('adjust-cancel').addEventListener('click', closeAdjustModal);
+  document.getElementById('adjust-save').addEventListener('click', saveAdjust);
+  document.getElementById('adjust-backdrop').addEventListener('click', (e) => {
+    if (e.target.id === 'adjust-backdrop') closeAdjustModal();
+  });
+  // V2.1: 库存记录全列表
+  document.getElementById('btn-stocklog-back').addEventListener('click', () => showScreen('detail', { pushHistory: false }));
+  document.getElementById('btn-stocklog-add').addEventListener('click', openAdjustModal);
   document.getElementById('btn-edit-save').addEventListener('click', saveEdit);
   document.getElementById('btn-edit-delete').addEventListener('click', () => {
     confirmDialog({
