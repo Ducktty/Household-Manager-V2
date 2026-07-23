@@ -640,25 +640,31 @@ function confirmDialog({ title = '确认', body = '是否继续?', confirmText =
    6. 首页渲染
    ------------------------------------------------------------ */
 let homeSearchQuery = '';  // V2.3: 首页搜索词
+let homeCatFilter = '';    // V2.4: 首页分类 chip 过滤(为空=全部,否则=categoryId)
 
 function renderHome() {
   // 数量
   document.getElementById('home-count').textContent = PRODUCTS.length;
 
-  // V2.3: 搜索过滤
+  // V2.4: 渲染分类 chip 行
+  renderCatChips();
+
+  // V2.3: 搜索过滤 + V2.4: 分类 chip 过滤
   const q = homeSearchQuery.trim().toLowerCase();
-  const filtered = q
-    ? PRODUCTS.filter(p => {
-        // 名称匹配
-        if (p.name && p.name.toLowerCase().includes(q)) return true;
-        // 分类名匹配
-        if (p.categoryId) {
-          const c = getCategoryById(p.categoryId);
-          if (c && c.name && c.name.toLowerCase().includes(q)) return true;
-        }
-        return false;
-      })
-    : PRODUCTS;
+  let filtered = PRODUCTS;
+  if (q) {
+    filtered = filtered.filter(p => {
+      if (p.name && p.name.toLowerCase().includes(q)) return true;
+      if (p.categoryId) {
+        const c = getCategoryById(p.categoryId);
+        if (c && c.name && c.name.toLowerCase().includes(q)) return true;
+      }
+      return false;
+    });
+  }
+  if (homeCatFilter) {
+    filtered = filtered.filter(p => p.categoryId === homeCatFilter);
+  }
 
   // 警告横幅(搜索时隐藏)
   const banner = document.getElementById('alert-banner');
@@ -668,16 +674,45 @@ function renderHome() {
     const urgent = sortByUrgency(PRODUCTS).filter(p => getStatus(p) !== 'ok');
     if (urgent.length > 0) {
       banner.style.display = 'flex';
+      banner.className = 'alert-banner';
       document.getElementById('alert-t1').textContent = `${urgent.length} 件快用完了`;
       document.getElementById('alert-t2').textContent = urgent.slice(0, 3).map(p => p.name).join('、') + ' 需要补货';
     } else {
-      banner.style.display = 'none';
+      // V2.4: 保质期警告(优先显示)
+      const exp = getExpiringProducts();
+      if (exp.length > 0) {
+        banner.style.display = 'flex';
+        banner.className = 'alert-banner expiry';
+        const expired = exp.filter(p => getExpiryStatus(p.expiryDate).level === 'expired').length;
+        const soon = exp.length - expired;
+        document.getElementById('alert-t1').textContent = expired > 0
+          ? `${exp.length} 件产品到期提醒`
+          : `${exp.length} 件产品快过期了`;
+        document.getElementById('alert-t2').textContent = exp.slice(0, 3).map(p => {
+          const s = getExpiryStatus(p.expiryDate);
+          return `${p.name}(${s.text})`;
+        }).join('、');
+      } else {
+        banner.style.display = 'none';
+      }
     }
   }
 
   // 标题变化
-  document.getElementById('home-section-title').textContent = q ? `搜索结果(${filtered.length})` : '我的库存';
-  document.getElementById('home-section-more').textContent = q ? `关键词:"${q}"` : '按紧急度排序';
+  let title = '我的库存';
+  let more = '按紧急度排序';
+  if (q) {
+    title = `搜索结果(${filtered.length})`;
+    more = `关键词:"${q}"`;
+  } else if (homeCatFilter) {
+    const c = getCategoryById(homeCatFilter);
+    if (c) {
+      title = `${c.emoji} ${c.name}(${filtered.length})`;
+      more = '该分类下产品';
+    }
+  }
+  document.getElementById('home-section-title').textContent = title;
+  document.getElementById('home-section-more').textContent = more;
 
   // 列表
   const list = document.getElementById('product-list');
@@ -688,11 +723,12 @@ function renderHome() {
     empty.style.display = 'block';
     noResult.style.display = 'none';
   } else if (filtered.length === 0) {
-    // 有产品但搜索无结果
+    // 有产品但搜索/分类过滤无结果
     list.innerHTML = '';
     empty.style.display = 'none';
     noResult.style.display = 'block';
-    document.getElementById('product-no-result-text').textContent = `没找到 "${q}"`;
+    const noResultText = q ? `没找到 "${q}"` : '这个分类下还没有产品';
+    document.getElementById('product-no-result-text').textContent = noResultText;
   } else {
     empty.style.display = 'none';
     noResult.style.display = 'none';
@@ -703,6 +739,72 @@ function renderHome() {
 
   // 购物车 badge
   renderCartBadge();
+}
+
+/* V2.4: 渲染分类 chip 行(全部 + 各分类带产品数) */
+function renderCatChips() {
+  const row = document.getElementById('cat-chips-row');
+  if (!row) return;
+  const counts = {};
+  PRODUCTS.forEach(p => { if (p.categoryId) counts[p.categoryId] = (counts[p.categoryId] || 0) + 1; });
+  let html = '';
+  const allActive = !homeCatFilter;
+  html += `<div class="cat-chip ${allActive ? 'active' : ''}" data-cat-id="">📦 全部 <span class="cat-chip-count">${PRODUCTS.length}</span></div>`;
+  const sortedCats = [...CATEGORIES_DB].sort((a, b) => {
+    if (a.builtin !== b.builtin) return a.builtin ? -1 : 1;
+    return a.name.localeCompare(b.name, 'zh-CN');
+  });
+  for (const c of sortedCats) {
+    const n = counts[c.id] || 0;
+    if (n === 0) continue;
+    const active = homeCatFilter === c.id;
+    html += `<div class="cat-chip ${active ? 'active' : ''}" data-cat-id="${c.id}">${c.emoji} ${c.name} <span class="cat-chip-count">${n}</span></div>`;
+  }
+  row.innerHTML = html;
+  row.querySelectorAll('.cat-chip').forEach(chip => {
+    chip.onclick = () => {
+      const id = chip.dataset.catId;
+      homeCatFilter = id || '';
+      renderHome();
+    };
+  });
+}
+
+/* V2.4: 过期状态计算 */
+function getExpiryStatus(dateStr) {
+  if (!dateStr) return null;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const expiry = new Date(dateStr + 'T00:00:00');
+  if (isNaN(expiry.getTime())) return null;
+  const days = Math.ceil((expiry - today) / 86400000);
+  if (days < 0)  return { level: 'expired', days, text: `已过期 ${Math.abs(days)} 天` };
+  if (days === 0) return { level: 'danger', days, text: '今天到期' };
+  if (days <= 7)  return { level: 'danger', days, text: `${days} 天后过期` };
+  if (days <= 30) return { level: 'warn', days, text: `${days} 天后过期` };
+  return { level: 'ok', days, text: `${days} 天后过期` };
+}
+
+/* V2.4: 临期+已过期的产品(按紧急度排序) */
+function getExpiringProducts() {
+  const arr = [];
+  for (const p of PRODUCTS) {
+    if (!p.expiryDate) continue;
+    const s = getExpiryStatus(p.expiryDate);
+    if (!s) continue;
+    if (s.level === 'expired' || s.level === 'danger' || s.level === 'warn') {
+      arr.push(p);
+    }
+  }
+  // 排序:已过期最前,然后按天数升序
+  arr.sort((a, b) => {
+    const sa = getExpiryStatus(a.expiryDate);
+    const sb = getExpiryStatus(b.expiryDate);
+    const order = { expired: 0, danger: 1, warn: 2 };
+    if (order[sa.level] !== order[sb.level]) return order[sa.level] - order[sb.level];
+    return sa.days - sb.days;
+  });
+  return arr;
 }
 
 function renderProductCard(p) {
@@ -719,6 +821,9 @@ function renderProductCard(p) {
         : `剩 ${formatNum(p.qty || 0)} ${p.unit}`);
   const maxDays = 7;
   const progressPct = days == null ? 100 : Math.max(8, Math.min(100, (days / maxDays) * 100));
+  // V2.4: 过期标签
+  const expS = getExpiryStatus(p.expiryDate);
+  const expTag = expS ? `<span class="expiry-tag expiry-${expS.level}">📅 ${expS.text}</span>` : '';
 
   return `
     <div class="product-card" data-id="${p.id}">
@@ -728,7 +833,7 @@ function renderProductCard(p) {
           <span>${escapeHtml(p.name)}</span>
           <span class="status status-${status}">${statusText}</span>
         </div>
-        <div class="meta">${daysText}</div>
+        <div class="meta">${daysText}${expTag}</div>
         <div class="progress"><div class="progress-fill ${status}" style="width:${progressPct}%"></div></div>
       </div>
     </div>
@@ -969,6 +1074,9 @@ function renderDetail() {
   // V2.1: 库存记录预览(最近 3 条)
   renderStockLogPreview(p);
 
+  // V2.4: 保质期倒计时
+  renderExpiryOnDetail(p);
+
   // 价格统计
   const stats = getPriceStats(p);
   if (stats) {
@@ -1044,6 +1152,32 @@ function deleteCurrentProduct() {
       toast('已删除');
     },
   });
+}
+
+/* V2.4: 详情页保质期行(动态创建) */
+function renderExpiryOnDetail(p) {
+  let row = document.getElementById('detail-expiry-row');
+  if (!row) {
+    // 找到「上次盘点」所在行后插入
+    const anchor = document.getElementById('detail-last-update');
+    if (!anchor) return;
+    const metaBox = anchor.closest('.detail-row, .meta-row, [class*="row"]') || anchor.parentElement.parentElement;
+    row = document.createElement('div');
+    row.id = 'detail-expiry-row';
+    row.style.cssText = 'display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 13px;';
+    row.innerHTML = `<span style="color: var(--ink-3);">📅 保质期</span><span id="detail-expiry-date" style="color: var(--ink-2);"></span><span id="detail-expiry-tag"></span>`;
+    metaBox.appendChild(row);
+  }
+  const s = getExpiryStatus(p.expiryDate);
+  if (!s) {
+    row.style.display = 'none';
+    return;
+  }
+  row.style.display = 'flex';
+  document.getElementById('detail-expiry-date').textContent = p.expiryDate;
+  const tag = document.getElementById('detail-expiry-tag');
+  tag.className = 'expiry-tag expiry-' + s.level;
+  tag.textContent = s.text;
 }
 
 /* V2.1: 库存记录预览(详情页底部) */
@@ -1309,6 +1443,8 @@ function openEdit() {
   document.getElementById('edit-pack-unit').value = p.packUnit || '';
   document.getElementById('edit-usage-amount').value = p.usageAmount || 0;
   document.getElementById('edit-usage-period').value = p.usagePeriodDays || 1;
+  // V2.4: 保质期
+  document.getElementById('edit-expiry-date').value = p.expiryDate || '';
   updateMinUnitBlock('edit');
   syncUsageUnitLabel('edit');
   // 重新刷新一次(依赖 usage-amount 的值,同步后 才能判定)
@@ -1359,6 +1495,9 @@ function saveEdit() {
   p.packUnit = mu.packUnit;
   p.usageAmount = mu.usageAmount;
   p.usagePeriodDays = mu.usagePeriodDays;
+  // V2.4: 保质期
+  const expVal = document.getElementById('edit-expiry-date').value;
+  p.expiryDate = expVal || null;
   saveProducts();
   renderDetail();
   showScreen('detail', { pushHistory: false });
@@ -1695,6 +1834,7 @@ function saveManual() {
       usualPrice: price,
       history: [],
       stockLog: [],
+      expiryDate: document.getElementById('manual-expiry-date').value || null,
     };
     PRODUCTS.push(newP);
     recordPurchase(newP, qty, price, date);  // 加库存 + 写 history + 写 stockLog
@@ -2480,6 +2620,11 @@ function bindEvents() {
   });
   searchClear.addEventListener('click', clearHomeSearch);
 
+  // V2.4: 保质期「清除」按钮
+  document.getElementById('edit-expiry-clear').addEventListener('click', () => {
+    document.getElementById('edit-expiry-date').value = '';
+  });
+
   // V2.3: 设置 + 分类管理
   document.getElementById('btn-go-settings').addEventListener('click', openSettings);
   document.getElementById('btn-settings-back').addEventListener('click', () => showScreen('home', { pushHistory: false }));
@@ -2524,6 +2669,7 @@ function bindEvents() {
    ------------------------------------------------------------ */
 function clearHomeSearch() {
   homeSearchQuery = '';
+  homeCatFilter = '';  // V2.4: 同时清掉分类 chip
   const inp = document.getElementById('home-search');
   if (inp) inp.value = '';
   const clr = document.getElementById('home-search-clear');

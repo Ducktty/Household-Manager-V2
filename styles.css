@@ -1756,3 +1756,62 @@ a { color: var(--accent); text-decoration: none; }
   from { transform: translateX(20px); opacity: 0; }
   to { transform: translateX(0); opacity: 1; }
 }
+
+/* V2.4 分类 chip filter */
+.cat-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 12px;
+  background: var(--surface);
+  border: 1.5px solid var(--line);
+  border-radius: 999px;
+  font-size: 13px;
+  color: var(--ink-2);
+  white-space: nowrap;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all 0.15s;
+}
+.cat-chip:active { transform: scale(0.96); }
+.cat-chip.active {
+  background: var(--primary);
+  color: white;
+  border-color: var(--primary);
+}
+.cat-chip .cat-chip-count {
+  background: rgba(0,0,0,0.08);
+  color: inherit;
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  margin-left: 2px;
+  font-weight: 600;
+}
+.cat-chip.active .cat-chip-count {
+  background: rgba(255,255,255,0.25);
+}
+
+/* V2.4 过期标签 */
+.expiry-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 6px;
+  margin-left: 6px;
+  white-space: nowrap;
+}
+.expiry-tag.expiry-ok { background: #d1fae5; color: #065f46; }
+.expiry-tag.expiry-warn { background: #fef3c7; color: #92400e; }
+.expiry-tag.expiry-danger { background: #fee2e2; color: #991b1b; }
+.expiry-tag.expiry-expired { background: #991b1b; color: white; }
+
+/* V2.4 过期警告 banner */
+.alert-banner.expiry { background: #fef3c7; border-color: #f59e0b; color: #92400e; }
+.alert-banner.expiry .icon { color: #f59e0b; }
+.alert-banner.expiry .text .t1 { color: #92400e; }
+.alert-banner.expiry .text .t2 { color: #b45309; }
+
