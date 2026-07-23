@@ -418,7 +418,8 @@ function getForecastDays(p) {
 
 /* V2.2: 是否有最小单位(供 UI 判断) */
 function hasMinUnit(p) {
-  return !!(p.packSize && p.packSize > 1 && p.packUnit);
+  // 只要填了 packUnit 就视为有最小单位(即使 packSize=1 也能切换主/最小单位)
+  return !!(p.packUnit);
 }
 
 /* V2.2: 是否可计量 */
@@ -496,7 +497,7 @@ function findSimilar(query) {
 /* ------------------------------------------------------------
    4. 页面导航
    ------------------------------------------------------------ */
-const SCREENS = ['home', 'scan', 'gemini', 'detail', 'roi', 'paste', 'calc', 'manual', 'edit', 'cart', 'history', 'icon-picker', 'stock-log'];
+const SCREENS = ['home', 'scan', 'gemini', 'detail', 'roi', 'paste', 'calc', 'manual', 'edit', 'cart', 'history', 'icon-picker', 'stock-log', 'settings', 'categories'];
 let currentScreen = 'home';
 let screenHistory = ['home'];
 
@@ -576,6 +577,8 @@ const PARENT = {
   history: 'detail',
   'icon-picker': null,  // 动态: 可能是 manual / edit / detail
   'stock-log': 'detail',
+  settings: 'home',
+  categories: 'settings',
 };
 
 function goBack() {
@@ -636,30 +639,64 @@ function confirmDialog({ title = '确认', body = '是否继续?', confirmText =
 /* ------------------------------------------------------------
    6. 首页渲染
    ------------------------------------------------------------ */
+let homeSearchQuery = '';  // V2.3: 首页搜索词
+
 function renderHome() {
   // 数量
   document.getElementById('home-count').textContent = PRODUCTS.length;
 
-  // 警告横幅
-  const urgent = sortByUrgency(PRODUCTS).filter(p => getStatus(p) !== 'ok');
+  // V2.3: 搜索过滤
+  const q = homeSearchQuery.trim().toLowerCase();
+  const filtered = q
+    ? PRODUCTS.filter(p => {
+        // 名称匹配
+        if (p.name && p.name.toLowerCase().includes(q)) return true;
+        // 分类名匹配
+        if (p.categoryId) {
+          const c = getCategoryById(p.categoryId);
+          if (c && c.name && c.name.toLowerCase().includes(q)) return true;
+        }
+        return false;
+      })
+    : PRODUCTS;
+
+  // 警告横幅(搜索时隐藏)
   const banner = document.getElementById('alert-banner');
-  if (urgent.length > 0) {
-    banner.style.display = 'flex';
-    document.getElementById('alert-t1').textContent = `${urgent.length} 件快用完了`;
-    document.getElementById('alert-t2').textContent = urgent.slice(0, 3).map(p => p.name).join('、') + ' 需要补货';
-  } else {
+  if (q) {
     banner.style.display = 'none';
+  } else {
+    const urgent = sortByUrgency(PRODUCTS).filter(p => getStatus(p) !== 'ok');
+    if (urgent.length > 0) {
+      banner.style.display = 'flex';
+      document.getElementById('alert-t1').textContent = `${urgent.length} 件快用完了`;
+      document.getElementById('alert-t2').textContent = urgent.slice(0, 3).map(p => p.name).join('、') + ' 需要补货';
+    } else {
+      banner.style.display = 'none';
+    }
   }
+
+  // 标题变化
+  document.getElementById('home-section-title').textContent = q ? `搜索结果(${filtered.length})` : '我的库存';
+  document.getElementById('home-section-more').textContent = q ? `关键词:"${q}"` : '按紧急度排序';
 
   // 列表
   const list = document.getElementById('product-list');
   const empty = document.getElementById('product-empty');
+  const noResult = document.getElementById('product-no-result');
   if (PRODUCTS.length === 0) {
     list.innerHTML = '';
     empty.style.display = 'block';
+    noResult.style.display = 'none';
+  } else if (filtered.length === 0) {
+    // 有产品但搜索无结果
+    list.innerHTML = '';
+    empty.style.display = 'none';
+    noResult.style.display = 'block';
+    document.getElementById('product-no-result-text').textContent = `没找到 "${q}"`;
   } else {
     empty.style.display = 'none';
-    const sorted = sortByUrgency(PRODUCTS);
+    noResult.style.display = 'none';
+    const sorted = sortByUrgency(filtered);
     list.innerHTML = sorted.map(p => renderProductCard(p)).join('');
     bindProductCardEvents();
   }
@@ -1227,9 +1264,22 @@ function deleteStockLogEntry() {
   toast('已删除');
 }
 
+function refreshCategorySelectOptions() {
+  ['manual-category', 'edit-category'].forEach(id => {
+    const sel = document.getElementById(id);
+    if (!sel) return;
+    const cur = sel.value;
+    sel.innerHTML = CATEGORIES_DB.map(c =>
+      `<option value="${escapeHtml(c.name)}">${c.emoji || '📦'} ${escapeHtml(c.name)}</option>`
+    ).join('');
+    if (CATEGORIES_DB.find(c => c.name === cur)) sel.value = cur;
+  });
+}
+
 function openEdit() {
   const p = PRODUCTS.find(x => x.id === currentProductId);
   if (!p) return;
+  refreshCategorySelectOptions();
   document.getElementById('edit-name').value = p.name;
   // select 里存的是分类名(保持 V1 兼容)
   const cat = p.categoryId ? getCategoryById(p.categoryId) : null;
@@ -1462,6 +1512,7 @@ let manualTargetProduct = null;   // 简化模式下,选中的产品
 function openManual(prefill = {}) {
   manualMode = 'new';
   manualTargetProduct = null;
+  refreshCategorySelectOptions();
   document.getElementById('manual-title').textContent = '手动添加产品';
   document.getElementById('manual-subtitle').textContent = '买回来的东西没拍照?填一下';
   document.getElementById('manual-save-text').textContent = '保存到库存';
@@ -1511,7 +1562,9 @@ function syncUsageUnitLabel(prefix) {
   const packUnit = document.getElementById(prefix + '-pack-unit');
   const label = document.getElementById(prefix + '-usage-amount-unit');
   if (packUnit && label) {
-    const u = packUnit.value.trim() || '份';
+    // V2.2 bug fix: 默认用 packUnit,空时用主单位(盒/瓶/包)再回退“份”
+    const mainUnit = document.getElementById(prefix + '-unit');
+    const u = packUnit.value.trim() || (mainUnit && mainUnit.value.trim()) || '份';
     label.textContent = u;
   }
 }
@@ -2385,6 +2438,38 @@ function bindEvents() {
     if (e.target.id === 'hist-edit-backdrop') closeHistEditor();
   });
 
+  // V2.3: 首页搜索
+  const searchInput = document.getElementById('home-search');
+  const searchClear = document.getElementById('home-search-clear');
+  const debouncedSearch = debounce(() => {
+    renderHome();
+  }, 200);
+  searchInput.addEventListener('input', (e) => {
+    homeSearchQuery = e.target.value;
+    searchClear.style.display = homeSearchQuery ? 'flex' : 'none';
+    debouncedSearch();
+  });
+  searchInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' || e.key === 'Enter') {
+      e.preventDefault();
+      clearHomeSearch();
+    }
+  });
+  searchClear.addEventListener('click', clearHomeSearch);
+
+  // V2.3: 设置 + 分类管理
+  document.getElementById('btn-go-settings').addEventListener('click', openSettings);
+  document.getElementById('btn-settings-back').addEventListener('click', () => showScreen('home', { pushHistory: false }));
+  document.getElementById('btn-go-categories').addEventListener('click', openCategories);
+  document.getElementById('btn-cat-back').addEventListener('click', () => showScreen('settings', { pushHistory: false }));
+  document.getElementById('btn-cat-new').addEventListener('click', () => openCatEditModal(null));
+  document.getElementById('cat-edit-cancel').addEventListener('click', closeCatEditModal);
+  document.getElementById('cat-edit-save').addEventListener('click', saveCatEdit);
+  document.getElementById('cat-edit-backdrop').addEventListener('click', (e) => {
+    if (e.target.id === 'cat-edit-backdrop') closeCatEditModal();
+  });
+  document.getElementById('btn-clear-all-data').addEventListener('click', clearAllData);
+
   // ===== 长按菜单 =====
   document.getElementById('lp-edit').addEventListener('click', () => {
     const id = longPressTargetId;
@@ -2408,6 +2493,215 @@ function bindEvents() {
   window.addEventListener('popstate', () => {
     if (goBack()) return;
     showScreen('home', { pushHistory: false });
+  });
+}
+
+/* ------------------------------------------------------------
+   15.5 V2.3 — 首页搜索 + 设置 + 分类管理
+   ------------------------------------------------------------ */
+function clearHomeSearch() {
+  homeSearchQuery = '';
+  const inp = document.getElementById('home-search');
+  if (inp) inp.value = '';
+  const clr = document.getElementById('home-search-clear');
+  if (clr) clr.style.display = 'none';
+  renderHome();
+}
+
+function openSettings() {
+  // 更新分类数
+  document.getElementById('settings-cat-count').textContent = `共 ${CATEGORIES_DB.length} 个分类`;
+  showScreen('settings');
+}
+
+function openCategories() {
+  renderCategories();
+  showScreen('categories');
+}
+
+function renderCategories() {
+  const builtin = CATEGORIES_DB.filter(c => c.builtin);
+  const custom = CATEGORIES_DB.filter(c => !c.builtin);
+  document.getElementById('cat-sub').textContent = `内置 ${builtin.length} 个 + 自定义 ${custom.length} 个`;
+
+  // 内置(不可删)
+  const builtinWrap = document.getElementById('cat-list-builtin');
+  builtinWrap.innerHTML = '<h3 style="font-size:11px; color:var(--ink-3); font-weight:600; margin: 0 0 8px 4px; text-transform:uppercase; letter-spacing:0.5px;">内置</h3>' +
+    builtin.map(c => renderCatRow(c, false)).join('');
+
+  // 自定义
+  const customWrap = document.getElementById('cat-list-custom');
+  if (custom.length === 0) {
+    customWrap.innerHTML = '<h3 style="font-size:11px; color:var(--ink-3); font-weight:600; margin: 0 0 8px 4px; text-transform:uppercase; letter-spacing:0.5px;">自定义</h3>' +
+      '<div style="background: var(--surface); border: 1px dashed var(--line); border-radius: var(--r); padding: 16px; text-align: center; color: var(--ink-3); font-size: 12px;">点上面"新建分类"创建</div>';
+  } else {
+    customWrap.innerHTML = '<h3 style="font-size:11px; color:var(--ink-3); font-weight:600; margin: 0 0 8px 4px; text-transform:uppercase; letter-spacing:0.5px;">自定义</h3>' +
+      custom.map(c => renderCatRow(c, true)).join('');
+  }
+  bindCategoryRowEvents();
+}
+
+function renderCatRow(c, isCustom) {
+  const productCount = PRODUCTS.filter(p => p.categoryId === c.id).length;
+  return `
+    <div class="cat-row">
+      <div class="swatch" style="background:${c.color || '#f1f5f9'}">${c.emoji || '📦'}</div>
+      <div class="info">
+        <div class="n">${escapeHtml(c.name)}</div>
+        <div class="m">${productCount} 件产品${isCustom ? '' : ' · 内置'}</div>
+      </div>
+      <div class="acts">
+        <button class="cat-edit-btn" data-id="${c.id}" title="编辑">✏️</button>
+        <button class="cat-delete-btn danger ${isCustom ? '' : 'disabled'}" data-id="${c.id}" title="${isCustom ? '删除' : '内置分类不可删除'}">🗑</button>
+      </div>
+    </div>
+  `;
+}
+
+// 点击编辑/删除按钮(用事件委托,render 后再绑)
+function bindCategoryRowEvents() {
+  document.querySelectorAll('.cat-edit-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openCatEditModal(btn.dataset.id);
+    });
+  });
+  document.querySelectorAll('.cat-delete-btn').forEach(btn => {
+    if (btn.classList.contains('disabled')) return;
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      deleteCategory(btn.dataset.id);
+    });
+  });
+}
+
+let editingCatId = null;
+let catEditEmoji = '📦';
+let catEditColor = '#fef3c7';
+
+const CAT_EMOJI_OPTIONS = ['🥛', '🥤', '🍚', '🧂', '🧴', '🧻', '🪥', '📦', '🍪', '🍫', '🍰', '🍞', '🍜', '🍯', '🥚', '🧀', '🧇', '🥖', '🥨', '🥯', '🥫', '🍵', '☕', '🧃', '🥛', '🍼', '🍶', '🧴', '🧼', '🧽', '🪒', '🧴', '💊', '🩹', '🪥', '🌶', '🥒', '🥕', '🌽', '🍅', '🍆', '🥦'];
+const CAT_COLOR_OPTIONS = ['#fef3c7', '#dbeafe', '#fce7f3', '#ede9fe', '#dcfce7', '#fed7aa', '#fee2e2', '#d1fae5', '#cffafe', '#e0e7ff', '#fae8ff', '#f1f5f9'];
+
+function openCatEditModal(catId) {
+  editingCatId = catId;
+  const isNew = !catId;
+  const c = catId ? getCategoryById(catId) : { name: '', emoji: '📦', color: '#fef3c7' };
+  catEditEmoji = c.emoji || '📦';
+  catEditColor = c.color || '#fef3c7';
+  document.getElementById('cat-edit-title').textContent = isNew ? '新建分类' : '编辑分类';
+  document.getElementById('cat-edit-name').value = c.name || '';
+  renderCatEmojiGrid();
+  renderCatColorGrid();
+  document.getElementById('cat-edit-backdrop').style.display = 'flex';
+  setTimeout(() => document.getElementById('cat-edit-name').focus(), 100);
+}
+
+function closeCatEditModal() {
+  document.getElementById('cat-edit-backdrop').style.display = 'none';
+  editingCatId = null;
+}
+
+function renderCatEmojiGrid() {
+  const grid = document.getElementById('cat-emoji-grid');
+  grid.innerHTML = CAT_EMOJI_OPTIONS.map(e =>
+    `<button type="button" class="cat-pick-cell ${e === catEditEmoji ? 'selected' : ''}" data-emoji="${e}" style="font-size:22px;">${e}</button>`
+  ).join('');
+  grid.querySelectorAll('.cat-pick-cell').forEach(btn => {
+    btn.addEventListener('click', () => {
+      catEditEmoji = btn.dataset.emoji;
+      renderCatEmojiGrid();
+    });
+  });
+}
+
+function renderCatColorGrid() {
+  const grid = document.getElementById('cat-color-grid');
+  grid.innerHTML = CAT_COLOR_OPTIONS.map(c =>
+    `<button type="button" class="cat-pick-cell color ${c === catEditColor ? 'selected' : ''}" data-color="${c}" style="background:${c}"></button>`
+  ).join('');
+  grid.querySelectorAll('.cat-pick-cell').forEach(btn => {
+    btn.addEventListener('click', () => {
+      catEditColor = btn.dataset.color;
+      renderCatColorGrid();
+    });
+  });
+}
+
+function saveCatEdit() {
+  const name = document.getElementById('cat-edit-name').value.trim();
+  if (!name) { toast('请填分类名'); return; }
+  // 重名检查
+  const dup = CATEGORIES_DB.find(c => c.name === name && c.id !== editingCatId);
+  if (dup) { toast('已存在同名分类'); return; }
+  if (editingCatId) {
+    const c = getCategoryById(editingCatId);
+    c.name = name;
+    c.emoji = catEditEmoji;
+    c.color = catEditColor;
+  } else {
+    CATEGORIES_DB.push({
+      id: 'cat_' + uid(),
+      name,
+      emoji: catEditEmoji,
+      color: catEditColor,
+      builtin: false,
+    });
+  }
+  saveCategories();
+  closeCatEditModal();
+  renderCategories();
+  // 同步手动输入 / 编辑产品页的 select options
+  refreshCategorySelectOptions();
+  // 同步首页 list(emoji/名字可能变)
+  renderHome();
+  toast('已保存');
+}
+
+function deleteCategory(catId) {
+  const c = getCategoryById(catId);
+  if (!c) return;
+  if (c.builtin) { toast('内置分类不能删'); return; }
+  const count = PRODUCTS.filter(p => p.categoryId === catId).length;
+  const otherCat = CATEGORIES_DB.find(x => x.name === '其他');
+  const otherName = otherCat ? otherCat.name : '其他';
+  confirmDialog({
+    title: '删除分类?',
+    body: count > 0
+      ? `"${c.name}"下还有 ${count} 件产品,删除后会自动移到"${otherName}"分类。`
+      : `确定删除分类"${c.name}"?`,
+    confirmText: '删除',
+    danger: true,
+    onConfirm: () => {
+      // 把产品移走
+      if (otherCat) {
+        for (const p of PRODUCTS) {
+          if (p.categoryId === catId) p.categoryId = otherCat.id;
+        }
+        saveProducts();
+      }
+      CATEGORIES_DB = CATEGORIES_DB.filter(x => x.id !== catId);
+      saveCategories();
+      renderCategories();
+      renderHome();
+      refreshCategorySelectOptions();
+      toast('已删除');
+    },
+  });
+}
+
+function clearAllData() {
+  confirmDialog({
+    title: '清除所有数据?',
+    body: '所有产品、分类、采购清单、库存记录都会清除,且无法恢复!',
+    confirmText: '清空',
+    danger: true,
+    onConfirm: () => {
+      localStorage.removeItem(STORAGE_KEY);
+      localStorage.removeItem(CATEGORIES_KEY);
+      localStorage.removeItem(IMAGES_KEY);
+      localStorage.removeItem(CART_KEY);
+      location.reload();
+    },
   });
 }
 
