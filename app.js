@@ -1098,8 +1098,8 @@ function openAdjustModal() {
     document.getElementById('adjust-current').textContent = `${formatNum(p.qty)} ${p.unit}`;
   }
   document.getElementById('adjust-qty').value = p.qty;
-  // V2.2: 单位标签
-  document.getElementById('adjust-qty-unit').textContent = p.unit;
+  // V2.2 hotfix: 单位标签跟 radio 同步
+  setAdjustUnitLabel(p, 'main');
   document.getElementById('adjust-note').value = '';
   // 默认选“日常消耗”
   document.querySelector('input[name="adjust-reason"][value="consumed"]').checked = true;
@@ -1110,11 +1110,26 @@ function openAdjustModal() {
     document.getElementById('adjust-unit-main-label').textContent = `主单位(${p.unit})`;
     document.getElementById('adjust-unit-min-label').textContent = `最小单位(${p.packUnit})`;
     document.querySelector('input[name="adjust-unit"][value="main"]').checked = true;
+    // 绑定 radio 切换(先解绑旧 handler,避免重复)
+    document.querySelectorAll('input[name="adjust-unit"]').forEach(r => {
+      r.onchange = () => setAdjustUnitLabel(p, r.value);
+    });
   } else {
     unitRadioBlock.style.display = 'none';
   }
   document.getElementById('adjust-backdrop').style.display = 'flex';
   document.getElementById('adjust-qty').focus();
+}
+
+/* V2.2 hotfix: 根据 radio 切换「改」后面的单位标签 */
+function setAdjustUnitLabel(p, mode) {
+  const label = document.getElementById('adjust-qty-unit');
+  if (!label) return;
+  if (mode === 'min' && hasMinUnit(p)) {
+    label.textContent = p.packUnit;
+  } else {
+    label.textContent = p.unit;
+  }
 }
 
 function closeAdjustModal() {
@@ -1296,6 +1311,8 @@ function openEdit() {
   document.getElementById('edit-usage-period').value = p.usagePeriodDays || 1;
   updateMinUnitBlock('edit');
   syncUsageUnitLabel('edit');
+  // 重新刷新一次(依赖 usage-amount 的值,同步后 才能判定)
+  updateMinUnitBlock('edit');
   showScreen('edit');
 }
 
@@ -1547,7 +1564,8 @@ function openManual(prefill = {}) {
   showScreen('manual');
 }
 
-/* V2.2: 切换"最小单位"块显示 + 显示/隐藏 cycle 输入 */
+/* V2.2: 切换"最小单位"块显示 + 显示/隐藏 cycle 输入
+   V2.2 hotfix: 勾上最小单位 且 填了 usageAmount > 0 时,隐藏「一个能用几天」 */
 function updateMinUnitBlock(prefix) {
   const toggle = document.getElementById(prefix + '-minunit-toggle');
   const block = document.getElementById(prefix + '-minunit-block');
@@ -1555,7 +1573,10 @@ function updateMinUnitBlock(prefix) {
   if (!toggle || !block || !cycleRow) return;
   const on = toggle.checked;
   block.style.display = on ? 'block' : 'none';
-  // 勾上时,cycle 输入依然可见(作为不可计量的 fallback)
+  // 判断是否可计量(填了使用频率)
+  const amtVal = parseFloat(document.getElementById(prefix + '-usage-amount').value);
+  const isMeasurable = on && !isNaN(amtVal) && amtVal > 0;
+  cycleRow.style.display = isMeasurable ? 'none' : 'flex';
 }
 
 function syncUsageUnitLabel(prefix) {
@@ -2347,8 +2368,10 @@ function bindEvents() {
 
   // V2.2: 最小单位 toggle
   document.getElementById('manual-minunit-toggle').addEventListener('change', () => updateMinUnitBlock('manual'));
+  document.getElementById('manual-usage-amount').addEventListener('input', () => updateMinUnitBlock('manual'));
   document.getElementById('manual-pack-unit').addEventListener('input', () => syncUsageUnitLabel('manual'));
   document.getElementById('edit-minunit-toggle').addEventListener('change', () => updateMinUnitBlock('edit'));
+  document.getElementById('edit-usage-amount').addEventListener('input', () => updateMinUnitBlock('edit'));
   document.getElementById('edit-pack-unit').addEventListener('input', () => syncUsageUnitLabel('edit'));
 
   // ===== 编辑 =====
