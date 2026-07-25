@@ -666,11 +666,14 @@ function renderHome() {
     filtered = filtered.filter(p => p.categoryId === homeCatFilter);
   }
 
-  // 警告横幅(搜索时隐藏)
+  // 警告横幅(搜索时隐藏两个)
   const banner = document.getElementById('alert-banner');
+  const expBanner = document.getElementById('expiry-banner');
   if (q) {
     banner.style.display = 'none';
+    if (expBanner) expBanner.style.display = 'none';
   } else {
+    // Banner 1: 快用完
     const urgent = sortByUrgency(PRODUCTS).filter(p => getStatus(p) !== 'ok');
     if (urgent.length > 0) {
       banner.style.display = 'flex';
@@ -678,22 +681,24 @@ function renderHome() {
       document.getElementById('alert-t1').textContent = `${urgent.length} 件快用完了`;
       document.getElementById('alert-t2').textContent = urgent.slice(0, 3).map(p => p.name).join('、') + ' 需要补货';
     } else {
-      // V2.4: 保质期警告(优先显示)
+      banner.style.display = 'none';
+    }
+    // Banner 2: 保质期(独立,跟 banner 1 共存)
+    if (expBanner) {
       const exp = getExpiringProducts();
       if (exp.length > 0) {
-        banner.style.display = 'flex';
-        banner.className = 'alert-banner expiry';
+        expBanner.style.display = 'flex';
         const expired = exp.filter(p => getExpiryStatus(p.expiryDate).level === 'expired').length;
         const soon = exp.length - expired;
-        document.getElementById('alert-t1').textContent = expired > 0
+        document.getElementById('expiry-t1').textContent = expired > 0
           ? `${exp.length} 件产品到期提醒`
           : `${exp.length} 件产品快过期了`;
-        document.getElementById('alert-t2').textContent = exp.slice(0, 3).map(p => {
+        document.getElementById('expiry-t2').textContent = exp.slice(0, 3).map(p => {
           const s = getExpiryStatus(p.expiryDate);
           return `${p.name}(${s.text})`;
         }).join('、');
       } else {
-        banner.style.display = 'none';
+        expBanner.style.display = 'none';
       }
     }
   }
@@ -1076,6 +1081,7 @@ function renderDetail() {
 
   // V2.4: 保质期倒计时
   renderExpiryOnDetail(p);
+  renderAutoDecOnDetail(p);
 
   // 价格统计
   const stats = getPriceStats(p);
@@ -1154,20 +1160,38 @@ function deleteCurrentProduct() {
   });
 }
 
+/* V2.5: 详情页自动扣库存行 */
+function renderAutoDecOnDetail(p) {
+  let row = document.getElementById('detail-autodec-row');
+  if (!row) {
+    const anchor = document.getElementById('detail-expiry-row');
+    if (!anchor || !anchor.parentNode) return;
+    row = document.createElement('div');
+    row.id = 'detail-autodec-row';
+    row.style.cssText = 'display:none; align-items:center; gap:8px; margin-bottom:12px; padding:10px 12px; background:#dbeafe; border-radius:10px; font-size:13px;';
+    row.innerHTML = `<span style="font-size:16px;">🔁</span><span id="detail-autodec-text" style="flex:1; color:#1e40af;"></span><span class="auto-decr-badge">已启用</span>`;
+    anchor.parentNode.insertBefore(row, anchor.nextSibling);
+  }
+  if (!p.autoDecrement) {
+    row.style.display = 'none';
+    return;
+  }
+  row.style.display = 'flex';
+  const today = todayStr();
+  const last = p.lastOpenedAt || p.lastStockUpdate || today;
+  const days = daysBetween(last, today);
+  let txt;
+  if (days === 0) txt = '今天已打开,无扣减';
+  else if (days === 1) txt = '昨天打开过,无扣减';
+  else txt = `上次打开 ${last}(${days} 天前),下次打开将自动扣 ${formatNum(days * (p.usageAmount || 0) / (p.usagePeriodDays || 1))} ${p.packUnit || '个'}`;
+  document.getElementById('detail-autodec-text').textContent = txt;
+}
+
 /* V2.4: 详情页保质期行(动态创建) */
 function renderExpiryOnDetail(p) {
-  let row = document.getElementById('detail-expiry-row');
-  if (!row) {
-    // 找到「上次盘点」所在行后插入
-    const anchor = document.getElementById('detail-last-update');
-    if (!anchor) return;
-    const metaBox = anchor.closest('.detail-row, .meta-row, [class*="row"]') || anchor.parentElement.parentElement;
-    row = document.createElement('div');
-    row.id = 'detail-expiry-row';
-    row.style.cssText = 'display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 13px;';
-    row.innerHTML = `<span style="color: var(--ink-3);">📅 保质期</span><span id="detail-expiry-date" style="color: var(--ink-2);"></span><span id="detail-expiry-tag"></span>`;
-    metaBox.appendChild(row);
-  }
+  // V2.4 hotfix: detail-expiry-row 已在 HTML 中(详情页 stock-bar 下方单独一行),无需动态创建
+  const row = document.getElementById('detail-expiry-row');
+  if (!row) return;
   const s = getExpiryStatus(p.expiryDate);
   if (!s) {
     row.style.display = 'none';
@@ -1231,9 +1255,11 @@ function openAdjustModal() {
   } else {
     document.getElementById('adjust-current').textContent = `${formatNum(p.qty)} ${p.unit}`;
   }
-  document.getElementById('adjust-qty').value = p.qty;
-  // V2.2 hotfix: 单位标签跟 radio 同步
+  // V2.2 hotfix: 单位标签 + 输入框初始值都跟 radio 同步
+  document.querySelector('input[name="adjust-unit"][value="main"]').checked = true;  // 先选主单位
   setAdjustUnitLabel(p, 'main');
+  window._adjustInitial = true;  // 标记初次打开
+  setAdjustQtyValue(p, 'main');  // p.qty 包
   document.getElementById('adjust-note').value = '';
   // 默认选“日常消耗”
   document.querySelector('input[name="adjust-reason"][value="consumed"]').checked = true;
@@ -1246,7 +1272,10 @@ function openAdjustModal() {
     document.querySelector('input[name="adjust-unit"][value="main"]').checked = true;
     // 绑定 radio 切换(先解绑旧 handler,避免重复)
     document.querySelectorAll('input[name="adjust-unit"]').forEach(r => {
-      r.onchange = () => setAdjustUnitLabel(p, r.value);
+      r.onchange = () => {
+        setAdjustUnitLabel(p, r.value);
+        setAdjustQtyValue(p, r.value);
+      };
     });
   } else {
     unitRadioBlock.style.display = 'none';
@@ -1255,7 +1284,9 @@ function openAdjustModal() {
   document.getElementById('adjust-qty').focus();
 }
 
-/* V2.2 hotfix: 根据 radio 切换「改」后面的单位标签 */
+/* V2.2 hotfix: 根据 radio 切换「改」后面的单位标签 + 输入框数值
+   主单位: p.qty(0.625 包)
+   最小单位: p.qty * p.packSize(10 片) */
 function setAdjustUnitLabel(p, mode) {
   const label = document.getElementById('adjust-qty-unit');
   if (!label) return;
@@ -1265,15 +1296,55 @@ function setAdjustUnitLabel(p, mode) {
     label.textContent = p.unit;
   }
 }
+function setAdjustQtyValue(p, mode) {
+  const inp = document.getElementById('adjust-qty');
+  if (!inp) return;
+  const hasMu = hasMinUnit(p);
+  const cur = parseFloat(inp.value);
+  // 用 sentinel:初次打开时 inp.value 来自 HTML attr "0",不是用户输入
+  // 简化:用 _adjustInitial 标志区分
+  if (window._adjustInitial) {
+    // 初次打开,直接用 p.qty
+    window._adjustInitial = false;
+    inp.value = mode === 'min' && hasMu ? (p.qty || 0) * (p.packSize || 1) : (p.qty || 0);
+    return;
+  }
+  // radio 切换,按当前 cur 换算
+  if (hasMu && mode === 'main' && !isNaN(cur)) {
+    inp.value = Number((cur / (p.packSize || 1)).toFixed(4));
+  } else if (hasMu && mode === 'min' && !isNaN(cur)) {
+    inp.value = cur * (p.packSize || 1);
+  } else {
+    inp.value = p.qty || 0;
+  }
+}
 
 function closeAdjustModal() {
   document.getElementById('adjust-backdrop').style.display = 'none';
 }
 
+/* V2.2 hotfix: +/- 按钮按当前 radio 模式决定步进
+   - 主单位: ±1 主单位(1 包)
+   - 最小单位: ±1 最小单位(1 片,1 个) */
 function changeAdjustQty(delta) {
   const inp = document.getElementById('adjust-qty');
   const cur = parseFloat(inp.value) || 0;
-  const next = Math.max(0, Number((cur + delta).toFixed(2)));
+  // 找当前产品 + 当前 radio
+  const p = PRODUCTS.find(x => x.id === currentProductId);
+  const hasMu = p && hasMinUnit(p);
+  const unitChoice = document.querySelector('input[name="adjust-unit"]:checked')?.value || 'main';
+  let step = 1;
+  if (hasMu && unitChoice === 'min') {
+    // 最小单位模式:步进 1 片
+    step = 1;
+  } else {
+    // 主单位模式:步进 1 包
+    step = 1;
+  }
+  // 最小单位模式:输入是片,直接 ±step
+  // 主单位模式:输入是包,直接 ±step
+  // 两种情况都是 ±1(用户视觉上 +1 就行,不用换算)
+  const next = Math.max(0, Number((cur + delta * step).toFixed(2)));
   inp.value = next;
 }
 
@@ -1319,6 +1390,52 @@ function saveAdjust() {
   renderHome();
   closeAdjustModal();
   toast('已保存');
+}
+
+/* V2.5: 启动时回溯自动扣库存
+   - 遍历所有产品
+   - 只对 autoDecrement=true 且 可计量的产品 生效
+   - 按 lastOpenedAt 到今天的天数 × 每日消耗 → 扣 p.qty
+   - 写 stockLog(reason=auto)
+   - 更新 lastOpenedAt = 今天 */
+function runAutoDecrement() {
+  const today = todayStr();
+  for (const p of PRODUCTS) {
+    if (!p.autoDecrement) continue;
+    if (!hasMinUnit(p) || !p.usageAmount || p.usageAmount <= 0) continue;
+    const ps = p.packSize || 1;
+    const pd = p.usagePeriodDays || 1;
+    const lastOpen = p.lastOpenedAt || p.lastStockUpdate || today;
+    const days = daysBetween(lastOpen, today);
+    if (days <= 0) {
+      // 同一天,只更新 lastOpenedAt
+      p.lastOpenedAt = today;
+      continue;
+    }
+    const cap = Math.min(days, 365);  // 上限 365 天
+    // 扣减量(主单位):cap 天 × usageAmount 个最小单位 / periodDays / packSize
+    const totalMin = cap * p.usageAmount / pd;
+    const deltaMain = totalMin / ps;
+    if (deltaMain <= 0) continue;
+    const before = p.qty || 0;
+    const after = Math.max(0, before - deltaMain);
+    const actualDelta = before - after;
+    if (actualDelta <= 0) {
+      p.lastOpenedAt = today;
+      continue;
+    }
+    p.qty = after;
+    p.lastOpenedAt = today;
+    pushStockLog(p, -actualDelta, 'auto', `${cap} 天未打开,自动扣 ${formatNum(totalMin)} ${p.packUnit || '个'}`);
+  }
+  saveProducts();
+}
+
+function daysBetween(d1, d2) {
+  // d1, d2 是 YYYY-MM-DD 字符串
+  const a = new Date(d1 + 'T00:00:00');
+  const b = new Date(d2 + 'T00:00:00');
+  return Math.floor((b - a) / 86400000);
 }
 
 /* V2.1: 库存记录全列表页 */
@@ -1445,10 +1562,14 @@ function openEdit() {
   document.getElementById('edit-usage-period').value = p.usagePeriodDays || 1;
   // V2.4: 保质期
   document.getElementById('edit-expiry-date').value = p.expiryDate || '';
+  // V2.5: 自动扣库存(初始值)
+  document.getElementById('edit-autodec-toggle').checked = !!p.autoDecrement;
   updateMinUnitBlock('edit');
   syncUsageUnitLabel('edit');
   // 重新刷新一次(依赖 usage-amount 的值,同步后 才能判定)
   updateMinUnitBlock('edit');
+  // V2.5: 自动扣库存联动
+  updateAutoDecEnablement('edit');
   showScreen('edit');
 }
 
@@ -1498,6 +1619,9 @@ function saveEdit() {
   // V2.4: 保质期
   const expVal = document.getElementById('edit-expiry-date').value;
   p.expiryDate = expVal || null;
+  // V2.5: 自动扣库存
+  p.autoDecrement = !!document.getElementById('edit-autodec-toggle').checked;
+  if (p.autoDecrement && !p.lastOpenedAt) p.lastOpenedAt = todayStr();
   saveProducts();
   renderDetail();
   showScreen('detail', { pushHistory: false });
@@ -1695,6 +1819,8 @@ function openManual(prefill = {}) {
   updateMinUnitBlock('manual');
   // 同步单位文字
   syncUsageUnitLabel('manual');
+  // V2.5: 自动扣库存联动
+  updateAutoDecEnablement('manual');
 
   // 候选
   refreshManualSuggestions();
@@ -1716,6 +1842,27 @@ function updateMinUnitBlock(prefix) {
   const amtVal = parseFloat(document.getElementById(prefix + '-usage-amount').value);
   const isMeasurable = on && !isNaN(amtVal) && amtVal > 0;
   cycleRow.style.display = isMeasurable ? 'none' : 'flex';
+  // V2.5: 自动扣库存联动
+  if (typeof updateAutoDecEnablement === 'function') {
+    updateAutoDecEnablement(prefix);
+  }
+}
+
+/* V2.5: 自动扣库存开关启用判定 */
+function updateAutoDecEnablement(prefix) {
+  const toggle = document.getElementById(prefix + '-autodec-toggle');
+  const hint = document.getElementById(prefix + '-autodec-hint');
+  if (!toggle) return;
+  const muOn = document.getElementById(prefix + '-minunit-toggle')?.checked;
+  const amt = parseFloat(document.getElementById(prefix + '-usage-amount').value);
+  const ok = muOn && !isNaN(amt) && amt > 0;
+  toggle.disabled = !ok;
+  if (!ok) {
+    toggle.checked = false;
+    if (hint) hint.style.display = 'block';
+  } else {
+    if (hint) hint.style.display = 'none';
+  }
 }
 
 function syncUsageUnitLabel(prefix) {
@@ -2879,6 +3026,7 @@ function clearAllData() {
    ------------------------------------------------------------ */
 function init() {
   loadData();
+  runAutoDecrement();  // V2.5: 启动时回溯自动扣库存
   bindEvents();
   setupClipboardAutoDetect();
   renderHome();

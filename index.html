@@ -50,6 +50,16 @@
             <div class="t2" id="alert-t2">暂无紧急提醒</div>
           </div>
         </div>
+        <!-- V2.4 hotfix: 保质期独立 banner(不与快用完互斥) -->
+        <div class="alert-banner" id="expiry-banner" style="display:none; background:#fef3c7; border-color:#f59e0b; color:#92400e; margin-top:-4px;">
+          <div class="icon" style="color:#f59e0b;">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+          </div>
+          <div class="text">
+            <div class="t1" id="expiry-t1" style="color:#92400e;">0 件产品快过期</div>
+            <div class="t2" id="expiry-t2" style="color:#b45309;">--</div>
+          </div>
+        </div>
 
         <button class="btn-primary" id="btn-scan">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
@@ -258,6 +268,12 @@
             <div class="label" style="font-size:10px; color:var(--ink-3);">上次盘点</div>
             <div class="val" id="detail-last-update" style="font-size:11px; color:var(--ink-3);">--</div>
           </div>
+        </div>
+        <!-- V2.4 hotfix: 保质期单独一行 -->
+        <div id="detail-expiry-row" style="display:none; align-items:center; gap:8px; margin-bottom:12px; padding:10px 12px; background:var(--bg); border-radius:10px; font-size:13px;">
+          <span style="color:var(--ink-3);">📅 保质期</span>
+          <span id="detail-expiry-date" style="color:var(--ink-2);"></span>
+          <span id="detail-expiry-tag"></span>
         </div>
 
         <button class="btn-primary" id="btn-adjust-qty" style="margin-bottom: 12px;">
@@ -623,6 +639,21 @@
               <div style="font-size:11px; color:var(--ink-2); margin-top:4px; line-height:1.5;">
                 💡 留空 0 = 不可计量(按下面的"天"估算)
               </div>
+              <!-- V2.5: 自动扣库存 -->
+              <div id="manual-autodec-row" style="display:flex; align-items:center; gap:10px; margin-top:12px;">
+                <div style="font-size:18px;">🔁</div>
+                <div style="flex:1;">
+                  <div style="font-size:13px; font-weight:600;">自动扣库存</div>
+                  <div style="font-size:11px; color:var(--ink-3); margin-top:2px;">App 打开时按使用频率自动扣</div>
+                </div>
+                <label class="switch">
+                  <input type="checkbox" id="manual-autodec-toggle">
+                  <span class="slider"></span>
+                </label>
+              </div>
+              <div id="manual-autodec-hint" style="font-size:11px; color:var(--ink-3); margin-top:6px; line-height:1.5; display:none;">
+                ⚠️ 仅在「有最小单位 + 填了使用频率」时可启用
+              </div>
             </div>
 
             <div class="form-row" id="manual-cycle-row">
@@ -758,6 +789,21 @@
             </div>
             <div style="font-size:11px; color:var(--ink-2); margin-top:4px; line-height:1.5;">
               💡 留空 0 = 不可计量(按下面的"天"估算)
+            </div>
+            <!-- V2.5: 自动扣库存开关 -->
+            <div id="edit-autodec-row" style="display:flex; align-items:center; gap:10px; margin-top:14px; padding:10px 12px; background:var(--bg); border-radius:10px;">
+              <div style="font-size:18px;">🔁</div>
+              <div style="flex:1;">
+                <div style="font-size:13px; font-weight:600;">自动扣库存</div>
+                <div style="font-size:11px; color:var(--ink-3); margin-top:2px;">启用后,App 打开时按使用频率自动扣</div>
+              </div>
+              <label class="switch">
+                <input type="checkbox" id="edit-autodec-toggle">
+                <span class="slider"></span>
+              </label>
+            </div>
+            <div id="edit-autodec-hint" style="font-size:11px; color:var(--ink-3); margin-top:6px; line-height:1.5; display:none;">
+              ⚠️ 仅在「有最小单位 + 填了使用频率」时可启用
             </div>
           </div>
 
