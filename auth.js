@@ -1,6 +1,12 @@
 /* V2.6: 登录/注册/登出 */
 (function () {
   let isRegisterMode = false;
+  // 默认登录模式
+  document.addEventListener('DOMContentLoaded', () => {
+    setMode(false);
+  });
+  // 立即调用
+  if (document.readyState !== 'loading') setMode(false);
 
   function getClient() {
     return window.supabaseClient;
@@ -68,6 +74,30 @@
     toast('已登出');
   }
 
+  async function changePassword(newPassword) {
+    const client = getClient();
+    if (!client) return { error: { message: '云端未配置' } };
+    if (!newPassword || newPassword.length < 6) {
+      return { error: { message: '密码至少 6 位' } };
+    }
+    return await client.auth.updateUser({ password: newPassword });
+  }
+
+  async function deleteAccount() {
+    const client = getClient();
+    if (!client) return { error: { message: '云端未配置' } };
+    return await client.rpc('delete_user_account');
+  }
+
+  async function resetPassword(email) {
+    const client = getClient();
+    if (!client) return { error: { message: '云端未配置' } };
+    if (!email) return { error: { message: '请填邮箱' } };
+    return await client.auth.resetPasswordForEmail(email, {
+      redirectTo: window.location.origin,
+    });
+  }
+
   async function getCurrentUser() {
     const client = getClient();
     if (!client) return null;
@@ -87,10 +117,19 @@
     document.getElementById('login-password').addEventListener('keydown', (e) => {
       if (e.key === 'Enter') submit();
     });
+    // 忘记密码
+    document.getElementById('login-forgot').addEventListener('click', async () => {
+      const email = document.getElementById('login-email').value.trim();
+      if (!email) { toast('请先填邮箱'); return; }
+      const { error } = await resetPassword(email);
+      if (error) { toast('发送失败:' + error.message); return; }
+      toast('重置链接已发到 ' + email + ',请查收');
+    });
   }
 
   // 暴露给 app.js / sync.js
   window.JDAuth = {
     submit, signInWithGoogle, signOut, getCurrentUser, setMode, bindLoginUI,
+    changePassword, deleteAccount, resetPassword,
   };
 })();

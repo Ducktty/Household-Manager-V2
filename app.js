@@ -2796,6 +2796,31 @@ function bindEvents() {
     if (e.target.id === 'cat-edit-backdrop') closeCatEditModal();
   });
   document.getElementById('btn-clear-all-data').addEventListener('click', clearAllData);
+  // V2.6: 账号区按钮
+  document.getElementById('btn-signout')?.addEventListener('click', async () => {
+    if (!confirm('确定登出?(登出后数据还在本地,不会再同步)')) return;
+    await window.JDAuth?.signOut?.();
+  });
+  document.getElementById('btn-change-password')?.addEventListener('click', async () => {
+    const np = prompt('输入新密码(至少 6 位)');
+    if (!np) return;
+    const { error } = await window.JDAuth?.changePassword?.(np);
+    if (error) { toast('修改失败:' + error.message); return; }
+    toast('密码已修改!请用新密码登录');
+  });
+  document.getElementById('btn-delete-account')?.addEventListener('click', async () => {
+    const u0 = await window.JDAuth?.getCurrentUser?.();
+    if (!u0) { toast('未登录'); return; }
+    if (!confirm(`⚠️ 危险操作!\n\n将删除账号 ${u0.email} 及所有云端数据。\n本地数据保留。\n\n确定吗?`)) return;
+    if (!confirm('再次确认:真的注销吗?(不可恢复)')) return;
+    const { error } = await window.JDAuth?.deleteAccount?.();
+    if (error) { toast('注销失败:' + error.message); return; }
+    // 清 supabase session + 刷新页面(强制丢 token)
+    await window.supabaseClient.auth.signOut();
+    // 刷新让 cache 失效
+    setTimeout(() => { window.location.reload(); }, 500);
+    toast('账号已注销');
+  });
 
   // ===== 长按菜单 =====
   document.getElementById('lp-edit').addEventListener('click', () => {
@@ -2836,10 +2861,32 @@ function clearHomeSearch() {
   renderHome();
 }
 
-function openSettings() {
+async function openSettings() {
   // 更新分类数
   document.getElementById('settings-cat-count').textContent = `共 ${CATEGORIES_DB.length} 个分类`;
+  // V2.6: 加载账号区
+  await refreshAccountBlock();
   showScreen('settings');
+}
+
+async function refreshAccountBlock() {
+  const user = await window.JDAuth?.getCurrentUser?.();
+  const emailEl = document.getElementById('account-email');
+  const btnChange = document.getElementById('btn-change-password');
+  const btnOut = document.getElementById('btn-signout');
+  const btnDel = document.getElementById('btn-delete-account');
+  if (!emailEl) return;
+  if (user) {
+    emailEl.textContent = user.email || '已登录';
+    if (btnChange) btnChange.style.display = 'flex';
+    if (btnOut) btnOut.style.display = 'flex';
+    if (btnDel) btnDel.style.display = 'flex';
+  } else {
+    emailEl.textContent = '未登录(离线模式)';
+    if (btnChange) btnChange.style.display = 'none';
+    if (btnOut) btnOut.style.display = 'none';
+    if (btnDel) btnDel.style.display = 'none';
+  }
 }
 
 function openCategories() {
