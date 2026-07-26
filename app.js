@@ -122,7 +122,9 @@ function debounce(fn, ms) {
    2. 数据层(localStorage)
    ------------------------------------------------------------ */
 let PRODUCTS = [];
+window.PRODUCTS = PRODUCTS;
 let CART = [];
+window.CART = CART;
 let lastPrompt = '';
 
 function loadData() {
@@ -154,7 +156,9 @@ function loadData() {
 
 /* V2 分类库 */
 let CATEGORIES_DB = [];   // [{id, name, emoji, color, builtin}]
+window.CATEGORIES_DB = CATEGORIES_DB;
 let IMAGES_DB = [];       // [{id, dataUrl, createdAt, usedCount}]
+window.IMAGES_DB = IMAGES_DB;
 
 function loadCategories() {
   try {
@@ -311,12 +315,20 @@ function recordPurchase(p, qty, price, date) {
 function saveProducts() {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(PRODUCTS));
+    // V2.6: 同步 window 引用,sync.js 用
+    window.PRODUCTS = PRODUCTS;
+    // V2.6: 后台推送到云
+    if (window.JDSync) {
+      window.JDSync.pushAll();
+    }
   } catch (e) { console.warn('save failed', e); }
 }
 
 function saveCart() {
   try {
     localStorage.setItem(CART_KEY, JSON.stringify(CART));
+    window.CART = CART;
+    if (window.JDSync) window.JDSync.pushAll();
   } catch (e) { console.warn('save cart failed', e); }
 }
 
@@ -497,7 +509,7 @@ function findSimilar(query) {
 /* ------------------------------------------------------------
    4. 页面导航
    ------------------------------------------------------------ */
-const SCREENS = ['home', 'scan', 'gemini', 'detail', 'roi', 'paste', 'calc', 'manual', 'edit', 'cart', 'history', 'icon-picker', 'stock-log', 'settings', 'categories'];
+const SCREENS = ['login', 'home', 'scan', 'gemini', 'detail', 'roi', 'paste', 'calc', 'manual', 'edit', 'cart', 'history', 'icon-picker', 'stock-log', 'settings', 'categories'];
 let currentScreen = 'home';
 let screenHistory = ['home'];
 
@@ -3025,12 +3037,28 @@ function clearAllData() {
    16. 启动
    ------------------------------------------------------------ */
 function init() {
-  loadData();
-  runAutoDecrement();  // V2.5: 启动时回溯自动扣库存
+  // V2.6: 先尝试恢复 session,决定走登录还是直接进
+  window.JDAuth?.bindLoginUI?.();
+  window.JDSync?.init?.();
+  checkAuthAndEnter();
+}
+
+async function checkAuthAndEnter() {
+  loadData();  // 先加载本地数据(离线可用)
+  runAutoDecrement();
   bindEvents();
   setupClipboardAutoDetect();
-  renderHome();
-  showScreen('home', { pushHistory: false });
+  bindUserMenu();  // V2.6: 用户菜单(登出等)
+  const user = await window.JDAuth?.getCurrentUser?.();
+  if (user) {
+    // 已登录:拉云端 → 渲染
+    await window.JDSync?.pullAll?.();
+    renderHome();
+    showScreen('home', { pushHistory: false });
+  } else {
+    // 未登录:跳登录页
+    showScreen('login', { pushHistory: false });
+  }
   // 设置默认日期
   document.querySelectorAll('input[type="date"]').forEach(inp => {
     if (!inp.value) inp.value = todayStr();
@@ -3051,4 +3079,37 @@ function init() {
   };
 }
 
+// V2.6: 用户菜单(头像点 → 弹出菜单 含登出)
+function bindUserMenu() {
+  const av = document.getElementById('home-avatar');
+  if (!av) return;
+  av.onclick = null;
+  av.style.cursor = 'pointer';
+  av.onclick = async () => {
+    const user = await window.JDAuth?.getCurrentUser?.();
+    if (!user) {
+      // 未登录(离线模式):直接跳登录页
+      showScreen('login', { pushHistory: false });
+      return;
+    }
+    const email = user.email || '已登录';
+    const ok = confirm(`已登录: ${email}
+
+确定登出?(登出后数据仍在本地,但不会再同步)`);
+    if (ok) {
+      await window.JDAuth.signOut();
+      // onAuthStateChange 会处理跳转
+    }
+  };
+}
+
 document.addEventListener('DOMContentLoaded', init);
+
+// V2.6: 离线模式入口
+function enterAppOffline() {
+  loadData();
+  runAutoDecrement();
+  renderHome();
+  showScreen('home', { pushHistory: false });
+  toast('离线模式:数据仅本机');
+}

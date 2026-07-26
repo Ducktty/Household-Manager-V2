@@ -13,8 +13,51 @@
   <div class="phone">
 
 
+    <!-- ========== 屏幕 0:登录 / 注册(V2.6) ========== -->
+    <div class="screen" id="screen-login">
+      <div class="screen-body" style="padding: 32px 20px;">
+        <div style="text-align: center; margin-bottom: 32px;">
+          <div style="font-size: 48px; margin-bottom: 8px;">📦</div>
+          <div style="font-size: 22px; font-weight: 700; color: var(--ink);">家当管家</div>
+          <div style="font-size: 12px; color: var(--ink-3); margin-top: 4px;">家里的东西,记得清清楚楚</div>
+        </div>
+
+        <div id="login-panel">
+          <div class="form-row" style="flex-direction: column; align-items: stretch; gap: 6px;">
+            <label style="font-size: 12px; color: var(--ink-2);">📧 邮箱</label>
+            <input type="email" id="login-email" placeholder="you@example.com" autocomplete="email" style="padding: 12px 14px; border: 1.5px solid var(--line); border-radius: 10px; font-size: 14px; font-family: inherit; color: var(--ink); background: var(--surface);">
+          </div>
+          <div class="form-row" style="flex-direction: column; align-items: stretch; gap: 6px; margin-top: 14px;">
+            <label style="font-size: 12px; color: var(--ink-2);">🔒 密码</label>
+            <input type="password" id="login-password" placeholder="至少 6 位" autocomplete="current-password" style="padding: 12px 14px; border: 1.5px solid var(--line); border-radius: 10px; font-size: 14px; font-family: inherit; color: var(--ink); background: var(--surface);">
+          </div>
+          <button class="btn-primary" id="btn-login-submit" style="margin-top: 20px;">
+            <span id="login-submit-text">登 录</span>
+          </button>
+          <div style="text-align: center; margin-top: 14px; font-size: 13px; color: var(--ink-3);">
+            <span id="login-toggle-text">还没账号?</span><a id="login-toggle-link" style="color: var(--primary); text-decoration: none; cursor: pointer; font-weight: 600; margin-left: 4px;">去注册</a>
+          </div>
+
+          <div style="display: flex; align-items: center; gap: 10px; margin: 24px 0;">
+            <div style="flex: 1; height: 1px; background: var(--line);"></div>
+            <span style="font-size: 12px; color: var(--ink-3);">或</span>
+            <div style="flex: 1; height: 1px; background: var(--line);"></div>
+          </div>
+
+          <button id="btn-google-login" style="display: flex; align-items: center; justify-content: center; gap: 10px; width: 100%; padding: 12px; background: white; border: 1.5px solid var(--line); border-radius: 10px; font-size: 14px; color: var(--ink); cursor: pointer; font-weight: 500;">
+            <svg width="18" height="18" viewBox="0 0 48 48"><path fill="#FFC107" d="M43.611 20.083H42V20H24v8h11.303c-1.649 4.657-6.08 8-11.303 8-6.627 0-12-5.373-12-12s5.373-12 12-12c3.059 0 5.842 1.154 7.961 3.039l5.657-5.657C34.046 6.053 29.268 4 24 4 12.955 4 4 12.955 4 24s8.955 20 20 20 20-8.955 20-20c0-1.341-.138-2.65-.389-3.917z"/><path fill="#FF3D00" d="m6.306 14.691 6.571 4.819C14.655 15.108 18.961 12 24 12c3.059 0 5.842 1.154 7.961 3.039l5.657-5.657C34.046 6.053 29.268 4 24 4 16.318 4 9.656 8.337 6.306 14.691z"/><path fill="#4CAF50" d="M24 44c5.166 0 9.86-1.977 13.409-5.192l-6.19-5.238A11.91 11.91 0 0 1 24 36c-5.202 0-9.619-3.317-11.283-7.946l-6.522 5.025C9.505 39.556 16.227 44 24 44z"/><path fill="#1976D2" d="M43.611 20.083H42V20H24v8h11.303a12.04 12.04 0 0 1-4.087 5.571l.003-.002 6.19 5.238C36.971 39.205 44 34 44 24c0-1.341-.138-2.65-.389-3.917z"/></svg>
+            使用 Google 登录
+          </button>
+
+          <div style="text-align: center; margin-top: 28px;">
+            <a id="login-skip" style="color: var(--ink-3); font-size: 12px; cursor: pointer; text-decoration: underline;">先离线用,以后再登录</a>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- ========== 屏幕 1:首页 ========== -->
-    <div class="screen active" id="screen-home">
+    <div class="screen" id="screen-home">
       <div class="screen-body">
         <div class="home-header">
           <div class="greeting">
@@ -26,7 +69,7 @@
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"/></svg>
               <span id="cart-badge" style="display: none; position: absolute; top: -4px; right: -4px; background: var(--danger); color: white; font-size: 10px; font-weight: 700; min-width: 18px; height: 18px; border-radius: 9px; padding: 0 4px; line-height: 18px; text-align: center;">0</span>
             </button>
-            <div class="avatar">M</div>
+            <div class="avatar" id="home-avatar" style="cursor: pointer;">M</div>
           </div>
         </div>
 
@@ -1230,6 +1273,12 @@
 
 <div class="desktop-hint">📱 建议在手机模式查看,或按 F12 切到手机视图</div>
 
+<!-- V2.6: Supabase SDK + 登录/同步 -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="config.js"></script>
+<script src="supabase-client.js"></script>
+<script src="auth.js"></script>
+<script src="sync.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
