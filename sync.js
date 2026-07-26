@@ -32,8 +32,9 @@
     if (cartErr) console.warn('[sync] pull cart err', cartErr);
 
     // 写到全局
+    // 关键: 保持 PRODUCTS 引用,只改内容(否则闭包里的 PRODUCTS 变量没变,renderHome 还是空)
     if (Array.isArray(products)) {
-      window.PRODUCTS = products.map(p => ({
+      const newProducts = products.map(p => ({
         id: p.id, name: p.name,
         categoryId: p.category_id, emoji: p.emoji, imageId: p.image_id,
         unit: p.unit, cycle: p.cycle,
@@ -46,17 +47,46 @@
         history: p.history || [], stockLog: p.stock_log || [],
         updated_at: p.updated_at,
       }));
+      // 拿到 app.js 闭包里的 PRODUCTS 数组(通过全局函数)
+      const ref = window.__getPRODUCTS?.();
+      if (ref) {
+        ref.length = 0;
+        ref.push(...newProducts);
+      } else {
+        window.PRODUCTS = newProducts;
+      }
     }
     if (Array.isArray(cats)) {
-      window.CATEGORIES_DB = cats.map(c => ({
+      const newCats = cats.map(c => ({
         id: c.id, name: c.name, emoji: c.emoji, color: c.color, builtin: c.builtin,
       }));
+      const ref = window.__getCATEGORIES?.();
+      if (ref) {
+        ref.length = 0;
+        ref.push(...newCats);
+      } else {
+        window.CATEGORIES_DB = newCats;
+      }
     }
     if (Array.isArray(imgs)) {
-      window.IMAGES_DB = imgs.map(i => ({ id: i.id, dataUrl: i.data_url }));
+      const newImgs = imgs.map(i => ({ id: i.id, dataUrl: i.data_url }));
+      const ref = window.__getIMAGES?.();
+      if (ref) {
+        ref.length = 0;
+        ref.push(...newImgs);
+      } else {
+        window.IMAGES_DB = newImgs;
+      }
     }
     if (Array.isArray(cart)) {
-      window.CART = cart.map(c => ({ productId: c.product_id, qty: c.qty, id: c.id }));
+      const newCart = cart.map(c => ({ productId: c.product_id, qty: c.qty, id: c.id }));
+      const ref = window.__getCART?.();
+      if (ref) {
+        ref.length = 0;
+        ref.push(...newCart);
+      } else {
+        window.CART = newCart;
+      }
     }
     lastSyncAt = Date.now();
     console.log('[sync] pulled', products?.length, 'products');

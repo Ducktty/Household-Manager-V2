@@ -123,8 +123,10 @@ function debounce(fn, ms) {
    ------------------------------------------------------------ */
 let PRODUCTS = [];
 window.PRODUCTS = PRODUCTS;
+window.__getPRODUCTS = () => PRODUCTS;
 let CART = [];
 window.CART = CART;
+window.__getCART = () => CART;
 let lastPrompt = '';
 
 function loadData() {
@@ -157,8 +159,10 @@ function loadData() {
 /* V2 分类库 */
 let CATEGORIES_DB = [];   // [{id, name, emoji, color, builtin}]
 window.CATEGORIES_DB = CATEGORIES_DB;
+window.__getCATEGORIES = () => CATEGORIES_DB;
 let IMAGES_DB = [];       // [{id, dataUrl, createdAt, usedCount}]
 window.IMAGES_DB = IMAGES_DB;
+window.__getIMAGES = () => IMAGES_DB;
 
 function loadCategories() {
   try {
