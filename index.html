@@ -66,6 +66,12 @@
           <div class="greeting">
             <h2>你好</h2>
             <p>家里有 <span id="home-count">0</span> 件东西</p>
+            <!-- V2.6: 同步状态栏 -->
+            <div id="sync-status" style="font-size: 11px; color: var(--ink-3); margin-top: 4px; display: flex; align-items: center; gap: 4px;">
+              <span id="sync-icon">☁️</span>
+              <span id="sync-text">同步中…</span>
+              <button id="sync-now" style="display:none; background: none; border: none; color: var(--primary); font-size: 11px; padding: 0 4px; cursor: pointer; text-decoration: underline; font-family: inherit;">立即同步</button>
+            </div>
           </div>
           <div style="display: flex; align-items: center; gap: 8px;">
             <button id="btn-go-cart" style="position: relative; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; cursor: pointer; color: var(--ink-2);">
@@ -909,6 +915,10 @@
           <h2 style="font-size: 20px; font-weight: 600; margin-bottom: 4px;">选择图标</h2>
           <p style="font-size: 12px; color: var(--ink-3);" id="iconpicker-sub">--</p>
         </div>
+        <!-- V2.6: 清除当前图标(回到默认 emoji) -->
+        <button id="btn-clear-icon" style="display:none; width:100%; padding:10px; background:var(--warn-bg); border:1px solid var(--warn-border); border-radius:var(--r); color:var(--ink-2); font-size:13px; font-weight:500; cursor:pointer; margin-bottom:12px; font-family:inherit;">
+          🗑 清除图标(回到默认)
+        </button>
 
         <!-- 当前选中预览 -->
         <div style="display: flex; align-items: center; gap: 12px; padding: 12px 14px; background: var(--bg); border-radius: var(--r); margin-bottom: 14px;">

@@ -3,7 +3,15 @@
    - push: 本地修改 → 后台 upsert 到云
    - 冲突:last-write-wins(updated_at) */
 (function () {
-  let syncInFlight = false;
+  // V2.6 fix: 不再用 syncInFlight 跳过(会导致丢 push),用 debounce 防抖
+  let pushTimer = null;
+  let syncReady = false;  // V2.6: pullAll 完之前不要 push,避免覆盖云端
+  function schedulePush() {
+    if (!syncReady) return;  // init 阶段不推
+    if (pushTimer) clearTimeout(pushTimer);
+    pushTimer = setTimeout(() => { pushAll(); pushTimer = null; }, 100);
+  }
+  function markSyncReady() { syncReady = true; }
   let lastSyncAt = 0;
 
   function getClient() {
@@ -62,8 +70,13 @@
       }));
       const ref = window.__getCATEGORIES?.();
       if (ref) {
-        ref.length = 0;
-        ref.push(...newCats);
+        // 关键: 如果云端返回 0 条但本地有(尤其是 8 个内置),保留本地
+        if (newCats.length === 0 && ref.length > 0) {
+          console.log('[sync] 云端无 categories, 保留本地', ref.length, '条');
+        } else {
+          ref.length = 0;
+          ref.push(...newCats);
+        }
       } else {
         window.CATEGORIES_DB = newCats;
       }
@@ -89,15 +102,15 @@
       }
     }
     lastSyncAt = Date.now();
-    console.log('[sync] pulled', products?.length, 'products');
+    console.log('[sync] pulled', products?.length, 'products', products?.map(x => x.name));
+    markSyncReady();  // pull 完了才允许 push
+    setTimeout(() => { console.log('[sync] cloud after 1s:', 'check'); }, 1000);
   }
 
   async function pushAll() {
     const client = getClient();
     const user = await getUser();
     if (!client || !user) return;
-    if (syncInFlight) { console.log('[sync] skip (in flight)'); return; }
-    syncInFlight = true;
     try {
       // 1. categories
       if (Array.isArray(window.CATEGORIES_DB) && window.CATEGORIES_DB.length) {
@@ -150,8 +163,6 @@
       console.log('[sync] pushed');
     } catch (e) {
       console.error('[sync] push err', e);
-    } finally {
-      syncInFlight = false;
     }
   }
 
@@ -169,6 +180,7 @@
     client.auth.onAuthStateChange(async (event, session) => {
       console.log('[auth]', event, session?.user?.id);
       if (event === 'SIGNED_IN' && session) {
+        if (window.setSyncStatus) window.setSyncStatus('syncing');
         // 拉取云端数据
         await pullAll();
         // 重新渲染
@@ -179,9 +191,11 @@
         if (typeof window.showScreen === 'function') {
           window.showScreen('home', { pushHistory: false });
         }
-        // 推本地到云(覆盖)
-        setTimeout(() => pushAll(), 1000);
+        // V2.6: 不自动 push 本地,以云端为准(避免覆盖其他装置的更新)
+        // 只有用户主动 add/edit/delete 时才会 push
+        if (window.setSyncStatus) window.setSyncStatus('online', '已同步 · ' + session.user.email);
       } else if (event === 'SIGNED_OUT') {
+        if (window.setSyncStatus) window.setSyncStatus('offline', '未登录');
         // 跳登录页
         if (typeof window.showScreen === 'function') {
           window.showScreen('login', { pushHistory: false });
@@ -191,5 +205,5 @@
   }
 
   // 暴露
-  window.JDSync = { pullAll, pushAll, deleteProduct, init, get lastSyncAt() { return lastSyncAt; } };
+  window.JDSync = { pullAll, pushAll, schedulePush, markSyncReady, deleteProduct, init, get lastSyncAt() { return lastSyncAt; } };
 })();

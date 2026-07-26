@@ -182,10 +182,7 @@ function loadCategories() {
   }
 }
 
-function saveCategories() {
-  try { localStorage.setItem(CATEGORIES_KEY, JSON.stringify(CATEGORIES_DB)); }
-  catch (e) { console.warn('save categories failed', e); }
-}
+
 
 function getCategoryById(id) {
   return CATEGORIES_DB.find(c => c.id === id);
@@ -205,10 +202,7 @@ function loadImages() {
   } catch (e) { IMAGES_DB = []; }
 }
 
-function saveImages() {
-  try { localStorage.setItem(IMAGES_KEY, JSON.stringify(IMAGES_DB)); }
-  catch (e) { console.warn('save images failed', e); }
-}
+
 
 function getImageById(id) {
   return IMAGES_DB.find(i => i.id === id);
@@ -316,15 +310,23 @@ function recordPurchase(p, qty, price, date) {
   saveProducts();
 }
 
+let _lastProductIds = new Set();
 function saveProducts() {
   try {
+    const newIds = new Set(PRODUCTS.map(p => p.id));
+    // V2.6: 检测被删的产品 → 调云删
+    if (_lastProductIds.size > 0) {
+      for (const oldId of _lastProductIds) {
+        if (!newIds.has(oldId)) {
+          window.JDSync?.deleteProduct?.(oldId);
+        }
+      }
+    }
+    _lastProductIds = newIds;
     localStorage.setItem(STORAGE_KEY, JSON.stringify(PRODUCTS));
-    // V2.6: 同步 window 引用,sync.js 用
     window.PRODUCTS = PRODUCTS;
     // V2.6: 后台推送到云
-    if (window.JDSync) {
-      window.JDSync.pushAll();
-    }
+    if (window.JDSync) window.JDSync.schedulePush();
   } catch (e) { console.warn('save failed', e); }
 }
 
@@ -332,8 +334,22 @@ function saveCart() {
   try {
     localStorage.setItem(CART_KEY, JSON.stringify(CART));
     window.CART = CART;
-    if (window.JDSync) window.JDSync.pushAll();
+    if (window.JDSync) window.JDSync.schedulePush();
   } catch (e) { console.warn('save cart failed', e); }
+}
+function saveCategories() {
+  try {
+    localStorage.setItem(CATEGORIES_KEY, JSON.stringify(CATEGORIES_DB));
+    window.CATEGORIES_DB = CATEGORIES_DB;
+    if (window.JDSync) window.JDSync.schedulePush();
+  } catch (e) { console.warn('save cat failed', e); }
+}
+function saveImages() {
+  try {
+    localStorage.setItem(IMAGES_KEY, JSON.stringify(IMAGES_DB));
+    window.IMAGES_DB = IMAGES_DB;
+    if (window.JDSync) window.JDSync.schedulePush();
+  } catch (e) { console.warn('save imgs failed', e); }
 }
 
 function savePrompt() {
@@ -2485,6 +2501,15 @@ function renderIconPickerContent() {
   if (!p) return;
   document.getElementById('iconpicker-product').textContent = p.name;
   renderProductEmojiBox('iconpicker-current', p);
+  // V2.6: 显示/隐藏清除按钮(只有当前有自定义图/emoji 才显示)
+  const clearBtn = document.getElementById('btn-clear-icon');
+  if (clearBtn) {
+    if (p.imageId || p.emoji) {
+      clearBtn.style.display = 'block';
+    } else {
+      clearBtn.style.display = 'none';
+    }
+  }
 
   // 拼 emoji 区:产品分类下的范本库
   const cat = p.categoryId ? getCategoryById(p.categoryId) : null;
@@ -2704,12 +2729,38 @@ function bindEvents() {
       // 详情页需要重渲才能看到新头像
       renderDetail();
       showScreen('detail', { pushHistory: false });
+    } else if (ret === 'edit') {
+      // V2.6 fix: edit 页也要重渲(更新顶部图标预览)
+      const p = PRODUCTS.find(x => x.id === currentProductId);
+      if (p) renderProductEmojiBox('detail-emoji', p);
+      showScreen('edit', { pushHistory: false });
+    } else if (ret === 'manual') {
+      // V2.6 fix: manual 页也要重渲
+      const p2 = PRODUCTS.find(x => x.id === currentProductId);
+      if (p2) renderProductEmojiBox('detail-emoji', p2);
+      showScreen('manual', { pushHistory: false });
     } else if (ret) {
       showScreen(ret, { pushHistory: false });
     } else {
       showScreen('home', { pushHistory: false });
     }
     renderHome();  // 主页列表也刷新
+  });
+  // V2.6: 清除当前图标
+  document.getElementById('btn-clear-icon').addEventListener('click', () => {
+    const p = PRODUCTS.find(x => x.id === currentProductId);
+    if (!p) return;
+    if (!confirm('清除当前图标,回到分类默认 emoji?')) return;
+    p.imageId = null;
+    p.emoji = null;
+    saveProducts();
+    renderIconPickerContent();
+    // 立即刷新上一页的预览
+    const ret = iconPickerReturnTo;
+    if (ret === 'edit' || ret === 'manual') {
+      renderProductEmojiBox('detail-emoji', p);
+    }
+    toast('已清除');
   });
   document.getElementById('upload-zone').addEventListener('click', () => {
     document.getElementById('upload-image-input').click();
@@ -3117,15 +3168,42 @@ async function checkAuthAndEnter() {
   runAutoDecrement();
   bindEvents();
   setupClipboardAutoDetect();
-  bindUserMenu();  // V2.6: 用户菜单(登出等)
+  bindUserMenu();
+  document.getElementById('sync-now')?.addEventListener('click', async () => {
+    setSyncStatus('syncing');
+    await window.JDSync?.pullAll?.();
+    await window.JDSync?.pushAll?.();
+    renderHome();
+    setSyncStatus('online');
+    toast('已同步');
+  });
   const user = await window.JDAuth?.getCurrentUser?.();
   if (user) {
-    // 已登录:拉云端 → 渲染
-    await window.JDSync?.pullAll?.();
+    setSyncStatus('syncing');
+    // V2.6: 检查离线更改
+    const pending = getOfflinePending();
+    if (pending && pending.on && pending.lastEmail === user.email) {
+      // 同账号,弹窗提示
+      if (confirm(`你有 ${pending.productsDelta || '一些'} 个离线更改未同步,是否同步到当前账号 (${user.email})?`)) {
+        await window.JDSync?.pullAll?.();
+        await window.JDSync?.pushAll?.();
+        setOfflinePending(false);
+        toast('已同步离线更改');
+      } else {
+        await window.JDSync?.pullAll?.();
+      }
+    } else if (pending && pending.on && pending.lastEmail !== user.email) {
+      // 不同账号,不弹窗,直接拉当前账号数据
+      await window.JDSync?.pullAll?.();
+    } else {
+      await window.JDSync?.pullAll?.();
+    }
     renderHome();
+    setSyncStatus('online', '已同步 · ' + user.email);
     showScreen('home', { pushHistory: false });
   } else {
     // 未登录:跳登录页
+    setSyncStatus('offline', '未登录');
     showScreen('login', { pushHistory: false });
   }
   // 设置默认日期
@@ -3147,6 +3225,34 @@ async function checkAuthAndEnter() {
     state: () => ({ products: PRODUCTS, cart: CART }),
   };
 }
+
+// V2.6: 同步状态栏更新
+window.setSyncStatus = function setSyncStatus(state, msg) {
+  const icon = document.getElementById('sync-icon');
+  const text = document.getElementById('sync-text');
+  const btn = document.getElementById('sync-now');
+  if (!icon || !text) return;
+  const map = {
+    online: { icon: '☁️', text: msg || '已同步', color: '#10b981' },
+    offline: { icon: '📴', text: msg || '离线模式(数据仅本机)', color: '#f59e0b' },
+    pending: { icon: '⏳', text: msg || '有未同步的离线更改', color: '#f59e0b' },
+    syncing: { icon: '🔄', text: msg || '同步中…', color: '#3b82f6' },
+    error: { icon: '⚠️', text: msg || '同步失败', color: '#ef4444' },
+  };
+  const cfg = map[state] || map.online;
+  icon.textContent = cfg.icon;
+  text.textContent = cfg.text;
+  text.style.color = cfg.color;
+  if (btn) btn.style.display = (state === 'pending' || state === 'error') ? 'inline' : 'none';
+};
+const OFFLINE_FLAG = 'jiadang_offline_pending';
+window.setOfflinePending = function (on, lastEmail) {
+  if (on) localStorage.setItem(OFFLINE_FLAG, JSON.stringify({ on: true, lastEmail: lastEmail || '', at: Date.now() }));
+  else localStorage.removeItem(OFFLINE_FLAG);
+};
+window.getOfflinePending = function () {
+  try { return JSON.parse(localStorage.getItem(OFFLINE_FLAG) || 'null'); } catch (e) { return null; }
+};
 
 // V2.6: 用户菜单(头像点 → 弹出菜单 含登出)
 function bindUserMenu() {
@@ -3180,5 +3286,6 @@ function enterAppOffline() {
   runAutoDecrement();
   renderHome();
   showScreen('home', { pushHistory: false });
+  if (window.setSyncStatus) window.setSyncStatus('offline', '离线模式(数据仅本机)');
   toast('离线模式:数据仅本机');
 }
