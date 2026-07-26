@@ -1160,13 +1160,21 @@ function deleteCurrentProduct() {
   if (!currentProductId) return;
   const p = PRODUCTS.find(x => x.id === currentProductId);
   if (!p) return;
+  const deletedId = p.id;
   confirmDialog({
     title: '删除产品',
     body: `确定删除 "${p.name}" 吗?这会同时清除所有购买历史。`,
     confirmText: '删除',
     danger: true,
-    onConfirm: () => {
-      PRODUCTS = PRODUCTS.filter(x => x.id !== currentProductId);
+    onConfirm: async () => {
+      // V2.6: 先从云端删,再从本地删
+      try { await window.JDSync?.deleteProduct?.(deletedId); } catch (e) { console.warn('cloud del', e); }
+      const ref = window.__getPRODUCTS?.() || PRODUCTS;
+      const newArr = ref.filter(x => x.id !== deletedId);
+      ref.length = 0;
+      ref.push(...newArr);
+      PRODUCTS = newArr;
+      window.PRODUCTS = PRODUCTS;
       saveProducts();
       currentProductId = null;
       renderHome();
@@ -3074,7 +3082,17 @@ function clearAllData() {
     body: '所有产品、分类、采购清单、库存记录都会清除,且无法恢复!',
     confirmText: '清空',
     danger: true,
-    onConfirm: () => {
+    onConfirm: async () => {
+      // V2.6: 也清云端
+      try {
+        if (window.JDSync) {
+          const ps = window.__getPRODUCTS?.() || PRODUCTS;
+          for (const p of ps) {
+            await window.JDSync.deleteProduct(p.id);
+          }
+          // 简化:deleteAll 用 SQL(用 service_role 才行,前端只能逐个)
+        }
+      } catch (e) { console.warn('cloud clear', e); }
       localStorage.removeItem(STORAGE_KEY);
       localStorage.removeItem(CATEGORIES_KEY);
       localStorage.removeItem(IMAGES_KEY);
