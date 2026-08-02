@@ -1452,8 +1452,8 @@ function runAutoDecrement() {
       p.lastOpenedAt = today;
       continue;
     }
-    const cap = Math.min(days, 365);  // 上限 365 天
-    // 扣减量(主单位):cap 天 × usageAmount 个最小单位 / periodDays / packSize
+    // V2.6 fix: 不补扣历史,只扣今天 1 天的量(用户每天都开,不会漏)
+    const cap = 1;
     const totalMin = cap * p.usageAmount / pd;
     const deltaMain = totalMin / ps;
     if (deltaMain <= 0) continue;
@@ -1466,7 +1466,7 @@ function runAutoDecrement() {
     }
     p.qty = after;
     p.lastOpenedAt = today;
-    pushStockLog(p, -actualDelta, 'auto', `${cap} 天未打开,自动扣 ${formatNum(totalMin)} ${p.packUnit || '个'}`);
+    pushStockLog(p, -actualDelta, 'auto', `自动扣 ${formatNum(totalMin)} ${p.packUnit || '个'}`);
   }
   saveProducts();
 }
@@ -2022,6 +2022,8 @@ function saveManual() {
       history: [],
       stockLog: [],
       expiryDate: document.getElementById('manual-expiry-date').value || null,
+      autoDecrement: !!document.getElementById('manual-autodec-toggle').checked,
+      lastOpenedAt: document.getElementById('manual-autodec-toggle').checked ? todayStr() : null,
     };
     PRODUCTS.push(newP);
     recordPurchase(newP, qty, price, date);  // 加库存 + 写 history + 写 stockLog
@@ -3165,7 +3167,6 @@ function init() {
 
 async function checkAuthAndEnter() {
   loadData();  // 先加载本地数据(离线可用)
-  runAutoDecrement();
   bindEvents();
   setupClipboardAutoDetect();
   bindUserMenu();
@@ -3198,6 +3199,8 @@ async function checkAuthAndEnter() {
     } else {
       await window.JDSync?.pullAll?.();
     }
+    runAutoDecrement();  // V2.6 fix: 必须在 pullAll 之后,否则被云端旧值覆盖
+    saveProducts();
     renderHome();
     setSyncStatus('online', '已同步 · ' + user.email);
     showScreen('home', { pushHistory: false });
