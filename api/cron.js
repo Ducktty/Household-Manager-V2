@@ -1,7 +1,6 @@
-// V2.7: VAPID 推送 cron
-// Vercel 每 5 分钟调一次,检查"该推"的 user,用 web-push 推
-import webpush from 'web-push';
-import { createClient } from '@supabase/supabase-js';
+// V2.7: VAPID 推送 cron (CommonJS for Vercel)
+const webpush = require('web-push');
+const { createClient } = require('@supabase/supabase-js');
 
 const VAPID_PUBLIC = process.env.VAPID_PUBLIC_KEY;
 const VAPID_PRIVATE = process.env.VAPID_PRIVATE_KEY;
@@ -22,7 +21,6 @@ function ensureVapid() {
   return true;
 }
 
-// Beijing time
 function beijingNow() {
   const now = new Date();
   const fmt = new Intl.DateTimeFormat('en-US', {
@@ -40,13 +38,11 @@ function beijingNow() {
   };
 }
 
-export default async function handler(req, res) {
-  // Vercel Cron 鉴权
+module.exports = async function handler(req, res) {
   const auth = req.headers.authorization;
   if (auth !== `Bearer ${CRON_SECRET}`) {
     return res.status(401).json({ error: 'unauthorized' });
   }
-
   if (!ensureVapid()) {
     return res.status(500).json({ error: 'vapid not configured' });
   }
@@ -58,9 +54,6 @@ export default async function handler(req, res) {
   const { date, time } = beijingNow();
   console.log('[cron] beijing', date, time);
 
-  // 找该推的 user:enabled=true, time=当前 HH:MM(±2min 容忍),今天没推过
-  // 简化:time 用 startsWith,允许前后 2 分钟
-  const timePrefix = time.slice(0, 4); // HH:M
   const { data: prefs, error: prefErr } = await supabase
     .from('push_preferences')
     .select('user_id, push_time, last_pushed')
@@ -70,14 +63,13 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: prefErr.message });
   }
 
-  // 过滤:time 匹配(±2 分钟)+ 今天没推
   const targets = (prefs || []).filter(p => {
-    if (p.last_pushed === date) return false;  // 今天已推
+    if (p.last_pushed === date) return false;
     const [h, m] = (p.push_time || '21:00').split(':').map(Number);
     const [nh, nm] = time.split(':').map(Number);
     const nowMin = nh * 60 + nm;
     const tgtMin = h * 60 + m;
-    return Math.abs(nowMin - tgtMin) <= 2;  // 2 分钟容忍
+    return Math.abs(nowMin - tgtMin) <= 2;
   });
 
   if (targets.length === 0) {
@@ -85,8 +77,6 @@ export default async function handler(req, res) {
   }
 
   const userIds = targets.map(t => t.user_id);
-
-  // 拉这些 user 的 subscriptions
   const { data: subs, error: subErr } = await supabase
     .from('push_subscriptions')
     .select('*')
@@ -113,14 +103,12 @@ export default async function handler(req, res) {
     } catch (e) {
       console.warn('[cron] push fail', sub.id, e.statusCode, e.message);
       results.push({ id: sub.id, ok: false, statusCode: e.statusCode, err: e.message });
-      // 404/410:订阅失效,删
       if (e.statusCode === 404 || e.statusCode === 410) {
         await supabase.from('push_subscriptions').delete().eq('id', sub.id);
       }
     }
   }
 
-  // 标记 last_pushed(防今天重推)
   for (const t of targets) {
     await supabase
       .from('push_preferences')
@@ -134,4 +122,4 @@ export default async function handler(req, res) {
     subs: subs?.length || 0,
     results,
   });
-}
+};
