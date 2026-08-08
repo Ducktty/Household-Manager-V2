@@ -1,8 +1,5 @@
 {
   "name": "jiadang-app",
   "version": "2.7.0",
-  "private": true,
-  "scripts": {
-    "build": "echo 'static site, no build'"
-  }
+  "private": true
 }
