@@ -108,12 +108,19 @@
   /* 初始化设置页 UI 状态 */
   function initSettingsUI() {
     const toggle = document.getElementById('push-toggle');
+    const timeInput = document.getElementById('push-time-input');
     const statusText = document.getElementById('push-status-text');
     const statusSub = document.getElementById('push-status-sub');
     if (!toggle) return;
 
+    // 恢复已存的时间
+    const savedTime = localStorage.getItem(PUSH_TIME) || '21:00';
+    if (timeInput) timeInput.value = savedTime;
+
     function refresh() {
       const enabled = localStorage.getItem(PUSH_KEY) === '1';
+      const time = localStorage.getItem(PUSH_TIME) || '21:00';
+      if (timeInput) timeInput.value = time;
       toggle.checked = enabled;
       if (!isSupported()) {
         statusText.textContent = '当前浏览器不支持推送';
@@ -121,10 +128,10 @@
         toggle.disabled = true;
       } else if (enabled) {
         statusText.textContent = '每日提醒已开启';
-        statusSub.textContent = '明天 21:00 自动推送';
+        statusSub.textContent = `明天 ${time} 自动推送`;
       } else {
         statusText.textContent = '每日提醒未开启';
-        statusSub.textContent = '开启后每日 21:00 推送';
+        statusSub.textContent = `开启后每日 ${time} 推送`;
       }
     }
 
@@ -138,6 +145,34 @@
         await disableReminder();
       }
       refresh();
+    });
+
+    if (timeInput) {
+      timeInput.addEventListener('change', () => {
+        const v = timeInput.value || '21:00';
+        localStorage.setItem(PUSH_TIME, v);
+        // 第一次改的时候,提示用户去 PushAlert 后台同步
+        const tipKey = 'jiadang_push_tip_shown';
+        if (!localStorage.getItem(tipKey)) {
+          showPushAlertTip();
+          localStorage.setItem(tipKey, '1');
+        }
+        toast('提醒时间已设为 ' + v);
+        refresh();
+      });
+    }
+  }
+
+  /* 弹个 modal 提示:PushAlert 后台要配对应 Campaign */
+  function showPushAlertTip() {
+    if (typeof showModal !== 'function') return;
+    showModal({
+      title: '⏰ 推送时间已修改',
+      body: '<p style="margin-bottom:8px;">提醒时间已存到本机。</p>' +
+            '<p style="color:var(--ink-2); font-size:13px; margin-bottom:8px;">⚠️ 实际推送由 <b>PushAlert 后台</b> 统一控制,改时间后请到 PushAlert 控制台同步修改 Campaign 的 Schedule。</p>' +
+            '<p style="color:var(--ink-2); font-size:13px;">或者直接用默认的每日 21:00。</p>' +
+            '<p style="margin-top:12px;"><a href="https://app.pushalert.co/dashboard" target="_blank" style="color:var(--brand);">→ 打开 PushAlert 后台</a></p>',
+      buttons: [{ text: '知道了', class: 'btn-primary', action: 'close' }],
     });
   }
 
