@@ -1,10 +1,12 @@
-/* V2.7: 每日签到提醒(PushAlert)
-   - 浏览器原生 Notification API + PushAlert 服务
-   - 设置页"每日提醒"开关
-   - 后端定时推送由 PushAlert dashboard 配(无需服务端 cron) */
+/* V2.7: VAPID 每日签到提醒(自建)
+   - 客户端用 VAPID 公钥订阅
+   - 订阅信息存 Supabase push_subscriptions
+   - 偏好(时间)存 push_preferences
+   - Vercel Cron 每 5 分钟跑 api/cron.js,按时推 */
 (function () {
   const PUSH_KEY = 'jiadang_push_enabled';
   const PUSH_TIME = 'jiadang_push_time';
+  const PUSH_TIP = 'jiadang_push_tip_shown';
 
   function getCfg() {
     return window.JD_CONFIG || {};
@@ -14,42 +16,96 @@
     return 'Notification' in window && 'serviceWorker' in navigator && 'PushManager' in window;
   }
 
-  function getPermission() {
-    if (!('Notification' in window)) return 'unsupported';
-    return Notification.permission;  // 'granted' | 'denied' | 'default'
+  /* VAPID 公钥是 base64 字符串,转 Uint8Array 给浏览器 */
+  function urlBase64ToUint8Array(base64String) {
+    const padding = '='.repeat((4 - base64String.length % 4) % 4);
+    const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+    const raw = atob(base64);
+    const output = new Uint8Array(raw.length);
+    for (let i = 0; i < raw.length; ++i) output[i] = raw.charCodeAt(i);
+    return output;
   }
 
-  async function requestPermission() {
-    if (!isSupported()) return 'unsupported';
-    const r = await Notification.requestPermission();
-    return r;
+  function getSupabase() {
+    return window.supabaseClient;
   }
 
-  /* 注册 push subscription(浏览器原生)
-     PushAlert SDK 会自动捕获,不用我们管服务端 */
-  async function subscribe() {
-    if (!isSupported()) throw new Error('浏览器不支持推送');
-    const perm = await requestPermission();
-    if (perm !== 'granted') throw new Error('未授权通知权限');
+  async function getUserId() {
+    const sb = getSupabase();
+    if (!sb) throw new Error('Supabase 未初始化');
+    const { data, error } = await sb.auth.getUser();
+    if (error || !data?.user) throw new Error('未登录,无法订阅');
+    return data.user.id;
+  }
+
+  /* 订阅 VAPID push,存到 Supabase */
+  async function subscribeVAPID() {
+    const cfg = getCfg();
+    if (!cfg.VAPID_PUBLIC_KEY) throw new Error('VAPID 公开 key 未配置');
     const reg = await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
     if (!sub) {
       sub = await reg.pushManager.subscribe({
         userVisibleOnly: true,
-        // 不带 applicationServerKey — 用 PushAlert 默认的(从他的 sw.js 来)
+        applicationServerKey: urlBase64ToUint8Array(cfg.VAPID_PUBLIC_KEY),
       });
     }
-    // PushAlert SDK 会自动捕获并注册
-    console.log('[push] subscribed', sub.endpoint.slice(0, 50));
+    const json = sub.toJSON();
+    const userId = await getUserId();
+    const sb = getSupabase();
+    const { error } = await sb.from('push_subscriptions').upsert({
+      user_id: userId,
+      endpoint: json.endpoint,
+      p256dh: json.keys.p256dh,
+      auth: json.keys.auth,
+    }, { onConflict: 'endpoint' });
+    if (error) throw new Error('存订阅失败:' + error.message);
+    console.log('[push] VAPID subscribed');
     return sub;
   }
 
-  async function unsubscribe() {
-    if (!isSupported()) return;
+  async function unsubscribeVAPID() {
     const reg = await navigator.serviceWorker.ready;
     const sub = await reg.pushManager.getSubscription();
-    if (sub) await sub.unsubscribe();
-    console.log('[push] unsubscribed');
+    if (sub) {
+      const json = sub.toJSON();
+      await sub.unsubscribe();
+      // 删 Supabase 记录
+      try {
+        const sb = getSupabase();
+        if (sb) await sb.from('push_subscriptions').delete().eq('endpoint', json.endpoint);
+      } catch (e) { console.warn(e); }
+    }
+  }
+
+  /* 偏好(时间)写 Supabase */
+  async function savePreference(enabled, time) {
+    try {
+      const sb = getSupabase();
+      if (!sb) return;
+      const userId = await getUserId();
+      await sb.from('push_preferences').upsert({
+        user_id: userId,
+        push_enabled: enabled,
+        push_time: time || '21:00',
+        push_tz: 'Asia/Shanghai',
+        updated_at: new Date().toISOString(),
+        // 改时间后清 last_pushed,允许今天再推一次
+        last_pushed: null,
+      }, { onConflict: 'user_id' });
+    } catch (e) { console.warn('[push] save pref', e); }
+  }
+
+  /* 从 Supabase 拉偏好(用于多设备同步) */
+  async function loadPreference() {
+    try {
+      const sb = getSupabase();
+      if (!sb) return null;
+      const userId = await getUserId();
+      const { data } = await sb.from('push_preferences')
+        .select('*').eq('user_id', userId).maybeSingle();
+      return data;
+    } catch (e) { return null; }
   }
 
   /* 启用每日提醒 */
@@ -58,37 +114,38 @@
       toast('当前浏览器不支持推送(建议 Chrome / Edge)');
       return false;
     }
-    try {
-      const perm = await requestPermission();
-      if (perm === 'denied') {
-        toast('通知权限被拒,请在浏览器设置里允许');
-        return false;
-      }
-      if (perm !== 'granted') {
-        toast('未授权,无法开启');
-        return false;
-      }
-      await subscribe();
-      localStorage.setItem(PUSH_KEY, '1');
-      localStorage.setItem(PUSH_TIME, '21:00');
-      // 测试通知
-      showTestNotification();
-      toast('已开启每日提醒');
-      return true;
-    } catch (e) {
-      console.warn('enable failed', e);
-      toast('开启失败:' + e.message);
+    const perm = await Notification.requestPermission();
+    if (perm === 'denied') {
+      toast('通知权限被拒,请在浏览器设置里允许');
       return false;
     }
+    if (perm !== 'granted') {
+      toast('未授权,无法开启');
+      return false;
+    }
+    try {
+      await subscribeVAPID();
+    } catch (e) {
+      console.warn(e);
+      // 没登录时也能用本地通知(等登录后再补订阅)
+      if (!/未登录/.test(e.message)) {
+        toast('订阅失败:' + e.message);
+        return false;
+      }
+    }
+    const time = localStorage.getItem(PUSH_TIME) || '21:00';
+    localStorage.setItem(PUSH_KEY, '1');
+    await savePreference(true, time);
+    showTestNotification();
+    toast('已开启每日提醒');
+    return true;
   }
 
   /* 关闭每日提醒 */
   async function disableReminder() {
-    try {
-      await unsubscribe();
-    } catch (e) { console.warn('unsub', e); }
+    try { await unsubscribeVAPID(); } catch (e) {}
     localStorage.removeItem(PUSH_KEY);
-    localStorage.removeItem(PUSH_TIME);
+    try { await savePreference(false, '21:00'); } catch (e) {}
     toast('已关闭每日提醒');
   }
 
@@ -97,31 +154,48 @@
     try {
       const reg = await navigator.serviceWorker.ready;
       await reg.showNotification('家当管家', {
-        body: '🔔 每日提醒已开启!明天 21:00 提醒你签到',
+        body: '🔔 每日提醒已开启!明天 ' + (localStorage.getItem(PUSH_TIME) || '21:00') + ' 自动推送',
         icon: '/favicon.ico',
         badge: '/favicon.ico',
         tag: 'jiadang-test',
       });
-    } catch (e) { console.warn('test notif failed', e); }
+    } catch (e) { console.warn(e); }
   }
 
-  /* 初始化设置页 UI 状态 */
-  function initSettingsUI() {
+  /* UI 初始化 */
+  async function initSettingsUI() {
     const toggle = document.getElementById('push-toggle');
     const timeInput = document.getElementById('push-time-input');
     const statusText = document.getElementById('push-status-text');
     const statusSub = document.getElementById('push-status-sub');
     if (!toggle) return;
 
-    // 恢复已存的时间
-    const savedTime = localStorage.getItem(PUSH_TIME) || '21:00';
-    if (timeInput) timeInput.value = savedTime;
+    // 先看 local 缓存
+    let localEnabled = localStorage.getItem(PUSH_KEY) === '1';
+    let localTime = localStorage.getItem(PUSH_TIME) || '21:00';
+
+    // 登录了从云端拉(覆盖本地)
+    if (window.supabaseClient) {
+      try {
+        const { data: { user } } = await window.supabaseClient.auth.getUser();
+        if (user) {
+          const pref = await loadPreference();
+          if (pref) {
+            localEnabled = !!pref.push_enabled;
+            localTime = pref.push_time || '21:00';
+            localStorage.setItem(PUSH_KEY, localEnabled ? '1' : '');
+            localStorage.setItem(PUSH_TIME, localTime);
+          }
+        }
+      } catch (e) { /* 离线时用本地 */ }
+    }
+
+    if (timeInput) timeInput.value = localTime;
+    toggle.checked = localEnabled;
 
     function refresh() {
-      const enabled = localStorage.getItem(PUSH_KEY) === '1';
-      const time = localStorage.getItem(PUSH_TIME) || '21:00';
-      if (timeInput) timeInput.value = time;
-      toggle.checked = enabled;
+      const enabled = toggle.checked;
+      const time = (timeInput && timeInput.value) || localTime;
       if (!isSupported()) {
         statusText.textContent = '当前浏览器不支持推送';
         statusSub.textContent = '建议用 Chrome / Edge / Firefox';
@@ -134,7 +208,6 @@
         statusSub.textContent = `开启后每日 ${time} 推送`;
       }
     }
-
     refresh();
 
     toggle.addEventListener('change', async () => {
@@ -148,34 +221,29 @@
     });
 
     if (timeInput) {
-      timeInput.addEventListener('change', () => {
+      timeInput.addEventListener('change', async () => {
         const v = timeInput.value || '21:00';
         localStorage.setItem(PUSH_TIME, v);
-        // 第一次改的时候,提示用户去 PushAlert 后台同步
-        const tipKey = 'jiadang_push_tip_shown';
-        if (!localStorage.getItem(tipKey)) {
+        await savePreference(toggle.checked, v);
+        toast('提醒时间已设为 ' + v + (toggle.checked ? ' (云端已同步)' : ''));
+        if (!localStorage.getItem(PUSH_TIP)) {
           showPushAlertTip();
-          localStorage.setItem(tipKey, '1');
+          localStorage.setItem(PUSH_TIP, '1');
         }
-        toast('提醒时间已设为 ' + v);
         refresh();
       });
     }
   }
 
-  /* 弹个 modal 提示:PushAlert 后台要配对应 Campaign */
   function showPushAlertTip() {
     if (typeof showModal !== 'function') return;
     showModal({
       title: '⏰ 推送时间已修改',
-      body: '<p style="margin-bottom:8px;">提醒时间已存到本机。</p>' +
-            '<p style="color:var(--ink-2); font-size:13px; margin-bottom:8px;">⚠️ 实际推送由 <b>PushAlert 后台</b> 统一控制,改时间后请到 PushAlert 控制台同步修改 Campaign 的 Schedule。</p>' +
-            '<p style="color:var(--ink-2); font-size:13px;">或者直接用默认的每日 21:00。</p>' +
-            '<p style="margin-top:12px;"><a href="https://app.pushalert.co/dashboard" target="_blank" style="color:var(--brand);">→ 打开 PushAlert 后台</a></p>',
+      body: '<p style="margin-bottom:8px;">提醒时间已存到云端,跨设备同步。</p>' +
+            '<p style="color:var(--ink-2); font-size:13px;">Vercel Cron 每 5 分钟检查一次,误差 ≤ 5 分钟。</p>',
       buttons: [{ text: '知道了', class: 'btn-primary', action: 'close' }],
     });
   }
 
-  // 暴露
-  window.JDPush = { enableReminder, disableReminder, initSettingsUI, isSupported, getPermission };
+  window.JDPush = { enableReminder, disableReminder, initSettingsUI, isSupported, savePreference };
 })();
