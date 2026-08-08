@@ -103,6 +103,18 @@
           </div>
         </div>
         <!-- V2.4 hotfix: 保质期独立 banner(不与快用完互斥) -->
+        <!-- V2.6: 每日扣库存提醒 -->
+        <div class="alert-banner" id="autodec-banner" style="display:none; background:#dbeafe; border-color:#3b82f6; color:#1e40af; margin-bottom:8px; padding:12px 14px; align-items:center;">
+          <div class="icon" style="color:#3b82f6; font-size:20px;">🔁</div>
+          <div class="text" style="flex:1;">
+            <div class="t1" id="autodec-t1" style="color:#1e40af; font-size:13px; font-weight:600;">今日还没扣库存</div>
+            <div class="t2" id="autodec-t2" style="color:#3b82f6; font-size:11px; margin-top:2px;">--</div>
+          </div>
+          <div style="display:flex; gap:6px; flex-shrink:0;">
+            <button id="btn-autodec-now" style="padding:6px 12px; background:#3b82f6; color:white; border:none; border-radius:6px; font-size:12px; font-weight:600; cursor:pointer; font-family:inherit;">立即扣</button>
+            <button id="btn-autodec-later" style="padding:6px 10px; background:transparent; color:#3b82f6; border:1px solid #3b82f6; border-radius:6px; font-size:12px; font-weight:500; cursor:pointer; font-family:inherit;">稍后</button>
+          </div>
+        </div>
         <div class="alert-banner" id="expiry-banner" style="display:none; background:#fef3c7; border-color:#f59e0b; color:#92400e; margin-top:-4px;">
           <div class="icon" style="color:#f59e0b;">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
@@ -1148,6 +1160,27 @@
           <p style="font-size: 12px; color: var(--ink-3);">个性化你的家当管家</p>
         </div>
 
+        <!-- V2.7: 每日提醒(独立于账号) -->
+        <div style="background: var(--surface); border: 1px solid var(--line-2); border-radius: var(--r); overflow: hidden; margin-bottom: 12px;">
+          <div style="padding: 14px 16px; border-bottom: 1px solid var(--line-2);">
+            <div style="font-size:12px; color:var(--ink-3); margin-bottom:4px; text-transform:uppercase; letter-spacing:0.5px; font-weight:600;">每日提醒</div>
+            <div style="font-size:13px; color:var(--ink-2);">每日 21:00 推送"待签到"提醒</div>
+          </div>
+          <div class="settings-row" id="btn-toggle-push" style="display:flex;">
+            <div style="display:flex; align-items:center; gap:12px; flex:1;">
+              <div style="width:32px; height:32px; border-radius:8px; background:#dbeafe; display:flex; align-items:center; justify-content:center; font-size:18px;">🔔</div>
+              <div>
+                <div style="font-size:14px; font-weight:600;" id="push-status-text">加载中...</div>
+                <div style="font-size:11px; color:var(--ink-3);" id="push-status-sub">--</div>
+              </div>
+            </div>
+            <label class="switch">
+              <input type="checkbox" id="push-toggle">
+              <span class="slider"></span>
+            </label>
+          </div>
+        </div>
+
         <!-- V2.6: 账号区(未登录时只显示"未登录") -->
         <div style="background: var(--surface); border: 1px solid var(--line-2); border-radius: var(--r); overflow: hidden; margin-bottom: 12px;" id="settings-account-block">
           <div style="padding: 14px 16px; border-bottom: 1px solid var(--line-2);">
@@ -1324,6 +1357,28 @@
 <script src="supabase-client.js"></script>
 <script src="auth.js"></script>
 <script src="sync.js"></script>
+<!-- V2.7: Service Worker + PushAlert SDK -->
+<script>
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('/sw.js').then(reg => {
+        console.log('[SW] registered', reg.scope);
+      }).catch(err => {
+        console.warn('[SW] register failed', err);
+      });
+    });
+  }
+</script>
+<!-- PushAlert SDK(由用户提供具体 URL) -->
+<script type="text/javascript">
+  (function(d, t) {
+    var g = d.createElement(t),
+        s = d.getElementsByTagName(t)[0];
+    g.src = "https://cdn.pushalert.co/integrate_1a61078db250677d0b1c63829216bf64.js";
+    s.parentNode.insertBefore(g, s);
+  }(document, "script"));
+</script>
+<script src="push.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

@@ -680,6 +680,13 @@ function renderHome() {
 
   // V2.4: 渲染分类 chip 行
   renderCatChips();
+  // V2.6: 渲染每日扣库存 banner(检查 sessionStorage dismissed)
+  if (!sessionStorage.getItem('autodec_dismissed_' + todayStr())) {
+    renderAutoDecBanner();
+  } else {
+    const b = document.getElementById('autodec-banner');
+    if (b) b.style.display = 'none';
+  }
 
   // V2.3: 搜索过滤 + V2.4: 分类 chip 过滤
   const q = homeSearchQuery.trim().toLowerCase();
@@ -779,6 +786,35 @@ function renderHome() {
 }
 
 /* V2.4: 渲染分类 chip 行(全部 + 各分类带产品数) */
+/* V2.6: 每日扣库存 banner */
+function renderAutoDecBanner() {
+  const banner = document.getElementById('autodec-banner');
+  if (!banner) return;
+  const today = todayStr();
+  // 找需要扣的产品:autoDecrement=true + 今天还没扣
+  const needs = PRODUCTS.filter(p => {
+    if (!p.autoDecrement) return false;
+    if (!hasMinUnit(p) || !p.usageAmount || p.usageAmount <= 0) return false;
+    if (p.qty != null && p.qty <= 0) return false;  // 没了不提醒
+    const last = p.lastOpenedAt || p.lastStockUpdate || '';
+    return last < today;  // 字符串比较 YYYY-MM-DD OK
+  });
+  if (needs.length === 0) {
+    banner.style.display = 'none';
+    return;
+  }
+  // 算总扣减量
+  let totalMin = 0;
+  for (const p of needs) {
+    totalMin += p.usageAmount || 0;
+  }
+  const t1 = document.getElementById('autodec-t1');
+  const t2 = document.getElementById('autodec-t2');
+  t1.textContent = `今日还没扣库存 (${needs.length} 件)`;
+  t2.textContent = `共扣 ${formatNum(totalMin)} ${needs[0].packUnit || '个'} · 打开 app 即扣`;
+  banner.style.display = 'flex';
+}
+
 function renderCatChips() {
   const row = document.getElementById('cat-chips-row');
   if (!row) return;
@@ -2862,6 +2898,20 @@ function bindEvents() {
   });
   document.getElementById('btn-clear-all-data').addEventListener('click', clearAllData);
   // V2.6: 账号区按钮
+  // V2.6: 每日扣库存 banner 按钮
+  document.getElementById('btn-autodec-now')?.addEventListener('click', () => {
+    // V2.6 hotfix: 实际跑扣减(只今天 1 天)
+    runAutoDecrement();
+    renderHome();
+    setSyncStatus('online', '已同步');
+    toast('已扣今日库存');
+  });
+  document.getElementById('btn-autodec-later')?.addEventListener('click', () => {
+    // 关闭 banner,今天不再提醒
+    const banner = document.getElementById('autodec-banner');
+    if (banner) banner.style.display = 'none';
+    sessionStorage.setItem('autodec_dismissed_' + todayStr(), '1');
+  });
   document.getElementById('btn-signout')?.addEventListener('click', async () => {
     if (!confirm('确定登出?(登出后数据还在本地,不会再同步)')) return;
     await window.JDAuth?.signOut?.();
@@ -2931,6 +2981,8 @@ async function openSettings() {
   document.getElementById('settings-cat-count').textContent = `共 ${CATEGORIES_DB.length} 个分类`;
   // V2.6: 加载账号区
   await refreshAccountBlock();
+  // V2.7: 推送 UI
+  if (window.JDPush?.initSettingsUI) window.JDPush.initSettingsUI();
   showScreen('settings');
 }
 
